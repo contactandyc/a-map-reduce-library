@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025 Andy Curtis <contactandyc@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 #ifndef AMR_SCHEDULE_H
 #define AMR_SCHEDULE_H
 
@@ -417,4 +420,3 @@ void amr_schedule_print(amr_schedule_t *h);
 #endif
 
 #endif  /* AMR_SCHEDULE_H */
-

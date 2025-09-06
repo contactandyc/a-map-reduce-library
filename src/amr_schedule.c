@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025 Andy Curtis <contactandyc@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 #include "a-map-reduce-library/amr_schedule.h"
 
 #include "a-memory-library/aml_alloc.h"
@@ -720,7 +723,7 @@ amr_task_link_t *get_task_list(amr_task_t *task, const char *name,
     aml_pool_clear(h->tmp_pool);
     char **dep = aml_pool_split2(h->tmp_pool, NULL, '|', destinations);
     for (size_t i = 0; dep[i] != NULL; i++) {
-      amr_task_t *node = _task_find(dep[i], h->task_root);
+      amr_task_t *node = _task_find(h->task_root, dep[i]);
       if (!node) {
         printf("%s is not a valid task (called from %s:%s)\n", dep[i],
                task->task_name, name);
@@ -734,7 +737,7 @@ amr_task_link_t *get_task_list(amr_task_t *task, const char *name,
     }
     return r;
   } else {
-    amr_task_t *node = _task_find(destinations, h->task_root);
+    amr_task_t *node = _task_find(h->task_root, destinations);
     if (!node) {
       printf("%s is not a valid task (called from %s:%s)\n", destinations,
              task->task_name, name);
@@ -850,7 +853,7 @@ static void scan_output(amr_worker_t *w, char **files, size_t num_files) {
 }
 
 void amr_task_output(amr_task_t *task, const char *name, const char *destinations,
-                    double out_ram_pct, double in_ram_pct, size_t flags) {
+                     double out_ram_pct, double in_ram_pct, size_t flags) {
   amr_schedule_t *scheduler = task->scheduler;
   aml_pool_t *pool = scheduler->pool;
 
@@ -865,8 +868,10 @@ void amr_task_output(amr_task_t *task, const char *name, const char *destination
   to->destinations = get_task_list(task, name, scheduler, destinations);
   to->flags = flags;
   to->num_partitions = task->num_partitions;
-  to->refcount_parts = (size_t *)aml_pool_zalloc(
-      pool, sizeof(size_t) * to->num_partitions);
+
+  // NEW: allocate cleanup/refcount arrays
+  to->cleaned_up_parts = (bool *)aml_pool_zalloc(pool, sizeof(bool) * to->num_partitions);
+  to->refcount_parts   = (size_t *)aml_pool_zalloc(pool, sizeof(size_t) * to->num_partitions);
 
   if (task->outputs) {
     amr_worker_output_t *n = task->outputs;
@@ -882,22 +887,31 @@ void amr_task_output(amr_task_t *task, const char *name, const char *destination
   task->current_output = to;
   task->current_input = NULL;
 
+  // Wire to destinations and bump refcounts
   amr_task_link_t *n = to->destinations;
   while (n) {
     amr_worker_file_info_cb file_info = NULL;
     if (flags & AMR_OUTPUT_SPLIT) {
       file_info = file_info_split;
       amr_task_dependency(n->task, task->task_name);
+      for (size_t i = 0; i < to->num_partitions; i++)
+        to->refcount_parts[i]++;   // every split partition has at least one consumer
     } else if (flags & AMR_OUTPUT_FIRST) {
       file_info = file_info_first;
       amr_task_dependency(n->task, task->task_name);
+      to->refcount_parts[0]++;     // only first partition
     } else if (flags & AMR_OUTPUT_PARTITION) {
       file_info = file_info_partition;
       amr_task_partial_dependency(n->task, task->task_name);
-    } else {
+      for (size_t i = 0; i < to->num_partitions; i++)
+        to->refcount_parts[i]++;
+    } else { // normal
       file_info = file_info_normal;
       amr_task_dependency(n->task, task->task_name);
+      for (size_t i = 0; i < to->num_partitions; i++)
+        to->refcount_parts[i]++;
     }
+
     amr_worker_input_t *ti =
         _amr_task_input(n->task, name, to, in_ram_pct, file_info);
     if (ti) {
@@ -1578,7 +1592,7 @@ bool amr_worker_debug(amr_worker_t *w) {
   return w->task->scheduler->parsed_args.debug_task ? true : false;
 }
 
-static inline size_t amr_worker_ram(amr_worker_t *w, double pct){
+size_t amr_worker_ram(amr_worker_t *w, double pct){
   if (pct <= 0.0) pct = 1e-6;
   if (pct > 1.0)  pct = 1.0;
   double total = w->task->scheduler->ram;
@@ -2486,7 +2500,7 @@ void amr_schedule_run(amr_schedule_t *h, amr_worker_cb on_complete) {
 
 amr_task_t *amr_schedule_task(amr_schedule_t *h, const char *task_name,
                             bool partitioned, amr_task_cb setup) {
-  amr_task_t *node = _task_find(task_name, h->task_root);
+  amr_task_t *node = _task_find(h->task_root, task_name);
   if (!node) {
     size_t num_partitions = 1;
     if (partitioned)
@@ -2677,13 +2691,33 @@ static void mark_task_complete(amr_task_state_link_t *state_link,
   state_link->completed = when;
   link_state(scheduler, state_link, partition);
 
-  for (amr_worker_output_t *out = task->outputs; out; out = out->next) {
-    if (out->flags & AMR_OUTPUT_SPLIT ||
-        out->flags & AMR_OUTPUT_PARTITION) {
-        cleanup_output_partition(out, partition);
-    } else {
-        cleanup_output(out);
+  amr_worker_input_t *inp = task->inputs;
+  while (inp) {
+    amr_worker_output_t *src = inp->src;
+    if (src) {
+      size_t p = (src->flags & AMR_OUTPUT_PARTITION) ? partition : 0;
+      // fallback: for SPLIT/NORMAL, loop all partitions
+      size_t start = (src->flags & AMR_OUTPUT_PARTITION) ? partition : 0;
+      size_t end   = (src->flags & AMR_OUTPUT_PARTITION) ? partition+1 : src->num_partitions;
+
+      for (size_t i = start; i < end; i++) {
+        if (src->refcount_parts[i] > 0) {
+          src->refcount_parts[i]--;
+          if (src->refcount_parts[i] == 0 &&
+              !(src->flags & AMR_OUTPUT_KEEP) &&
+              !src->cleaned_up_parts[i]) {
+
+            // Cleanup: unlink intermediate file for partition i
+            char *filename = amr_worker_input_name(NULL, inp, i);
+            if (filename)
+              unlink(filename);
+
+            src->cleaned_up_parts[i] = true;
+          }
+        }
+      }
     }
+    inp = inp->next;
   }
 
   bool partially_complete = false;
