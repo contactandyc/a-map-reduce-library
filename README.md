@@ -174,7 +174,7 @@ When you build an AMR application, it automatically includes a powerful CLI for 
 
 ## 📚 API Documentation
 
-The primary include for the framework, [`amr.h`](https://www.google.com/search?q=include/a-map-reduce-library/amr.h), is extensively documented. It serves as the definitive reference manual for the library.
+The primary include for the framework, [`amr.h`](include/a-map-reduce-library/amr.h), is extensively documented. It serves as the definitive reference manual for the library.
 
 Inside `amr.h`, you will find:
 
