@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Andy Curtis <contactandyc@gmail.com>
+# SPDX-FileCopyrightText: 2025-2026 Andy Curtis <contactandyc@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # CMakeLists.txt for libraries (regular or header-only)
@@ -43,13 +43,15 @@ endif()
 
 include(GNUInstallDirs)
 
-# ---- Dependencies ----
+# ---- Dependencies (Standard CMake) ----
 find_package(the_io_library CONFIG REQUIRED)
 find_package(a_memory_library CONFIG REQUIRED)
 find_package(the_macro_library CONFIG REQUIRED)
 
+# ---- Dependencies (PkgConfig Shims) ----
+
 # ── Library variants (ALL are defined & built/installed) ──────────────────────
-add_library(a_map_reduce_library_debug  src/amr_schedule.c)
+add_library(a_map_reduce_library_debug  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
 
 target_include_directories(a_map_reduce_library_debug PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -83,7 +85,7 @@ install(TARGETS a_map_reduce_library_debug EXPORT a_map_reduce_libraryTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-add_library(a_map_reduce_library_memory  src/amr_schedule.c)
+add_library(a_map_reduce_library_memory  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
 
 target_include_directories(a_map_reduce_library_memory PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -120,7 +122,7 @@ install(TARGETS a_map_reduce_library_memory EXPORT a_map_reduce_libraryTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-add_library(a_map_reduce_library_static  src/amr_schedule.c)
+add_library(a_map_reduce_library_static  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
 
 target_include_directories(a_map_reduce_library_static PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -154,7 +156,7 @@ install(TARGETS a_map_reduce_library_static EXPORT a_map_reduce_libraryTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-add_library(a_map_reduce_library_shared  src/amr_schedule.c)
+add_library(a_map_reduce_library_shared  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
 
 target_include_directories(a_map_reduce_library_shared PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
