@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2025-2026 Andy Curtis <contactandyc@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef AMR_INTERNAL_H
-#define AMR_INTERNAL_H
+#ifndef INTERNAL_AMR_INTERNAL_H
+#define INTERNAL_AMR_INTERNAL_H
 
 #include "a-map-reduce-library/amr.h"
 #include "the-macro-library/macro_map.h"

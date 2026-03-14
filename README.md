@@ -1,63 +1,73 @@
 # A-Map-Reduce Library (AMR)
 
-**A-Map-Reduce (AMR)** is a highly optimized, single-node, multi-core DAG (Directed Acyclic Graph) execution engine for out-of-core data processing in C.
+**A-Map-Reduce (AMR)** is a single-node, partitioned DAG (Directed Acyclic Graph) engine for out-of-core batch processing in C. 
 
-Think of it as a lightweight, blazing-fast "Apache Spark for a single machine." It is designed to handle datasets much larger than your available RAM by automatically managing multi-threaded execution, disk-spilling, sorting, and merging—all with the bare-metal performance of pure C.
-
----
-
-## 🚀 Key Features
-
-* **Multi-Core Execution:** Automatically scales across available CPU threads to process data partitions concurrently.
-* **Out-of-Core Processing:** Natively handles large-scale sorting, shuffles, and merges using efficient disk-backed temp files when datasets exceed RAM limits.
-* **Strongly Typed Binary Streams:** A flexible `amr_datatype_t` registry allows for zero-overhead struct serialization, custom comparators, and localized reduction logic.
-* **Modular DAGs & Pipelines:** Wire together complex topologies using individual Tasks or encapsulate them into reusable Pipelines.
-* **Incremental Caching:** Operates with "Make-like" behavior, intelligently skipping partitions if the upstream data hasn't changed.
-* **Powerful Built-in CLI:** Every AMR application automatically inherits a robust command-line interface for testing, sampling, and debugging specific graph nodes.
+It is designed to process datasets that exceed available system RAM by providing disk-backed shuffle, sort, and merge operations across multi-threaded worker partitions.
 
 ---
 
-## 🧠 Core Architecture
+## 🏗️ Engine Characteristics
 
-AMR relies on three foundational concepts:
+* **Partitioned Execution:** Workloads are split into discrete partitions and processed concurrently by a bounded pool of CPU threads.
+* **Out-of-Core I/O:** Automatically spills to disk and manages multi-way merges when sorts or shuffles exceed the configured RAM limits.
+* **Incremental Caching:** Operates with "Make-like" behavior, comparing file modification times against `.ack` files to intelligently skip partitions that do not need to be rebuilt.
+* **Schema-Registered Binary Streams:** An internal datatype registry maps C structs to serialization, partitioning, and sorting callbacks to centralize serialization logic and reduce direct raw-buffer manipulation in task code.
+* **Encapsulated Sub-Graphs:** Complex topologies can be wrapped into reusable `amr_pipeline_t` modules with explicit logical input and output ports.
 
-1. **The Scheduler (`amr_t`):** The global orchestrator. You allocate it, define the total resources (RAM, CPUs, Partitions), register your Tasks, and call `amr_run()`.
-2. **The Task (`amr_task_t`):** A logical step in the DAG (e.g., "tokenize_text" or "reduce_counts"). Tasks declare what inputs they need, what outputs they produce, and the function that processes the data.
-3. **The Worker (`amr_worker_t`):** The physical thread executing a slice of a Task. If a Task has 16 partitions, AMR spawns 16 Workers. Workers open physical files, read records, and write outputs concurrently.
+### 🛑 When NOT to use AMR
+* **Sub-millisecond latency:** AMR is a batch processing engine heavily reliant on file I/O and topological barriers. It is not a real-time stream processor.
+* **Multi-node clusters:** AMR scales vertically on a single machine. It does not handle network partitions or distributed consensus.
+* **Purely in-memory tasks:** If your entire dataset fits comfortably in RAM and doesn't require complex routing, standard `pthread` pools or OpenMP will be simpler and faster.
 
 ---
 
-## ⚡ Hello World: Word Count
+## 🛤️ The Core API Path
 
-Here is a minimal, complete example of an AMR application that copies an input file to an output file.
+Every AMR application follows a static setup and execution lifecycle. The DAG must be completely defined before execution begins.
+
+1. **Initialize:** Call `amr_init()` to define total Partitions, CPUs, and RAM.
+2. **Register Types:** Register your structs and their behaviors via `amr_register_datatype()`.
+3. **Define Tasks:** Register setup callbacks using `amr_task()`.
+4. **Wire the Graph:** Inside the setup callbacks, use the Stateful Builder API:
+   * Declare an input (`amr_task_input_...`).
+   * Declare an output (`amr_task_output...`).
+   * Bind them with a runner (`amr_task_transform()`).
+   * *Note: Configuration modifiers (like sorting or formatting) apply exclusively to the most recently declared input or output port.*
+5. **Execute:** Call `amr_run()` to finalize the graph, evaluate the cache, and spawn worker threads.
+
+---
+
+## ⚡ Hello World: Identity Copy
+
+Here is a minimal, complete example of an AMR application that copies a raw file from input to output.
 
 ```c
 #include "a-map-reduce-library/amr.h"
 #include <stdio.h>
 
-// 1. Define the task behavior
-bool hello_setup(amr_task_t *t) {
-    // Declare an input file
-    amr_task_input_files(t, "input.txt", 1.0, NULL);
+// 1. Define the task setup
+bool copy_setup(amr_task_t *task) {
+    // Declare an external input file
+    amr_task_input_files(task, "input.txt", 1.0, NULL);
     
-    // Declare an output file
-    amr_task_output(t, "output.txt", 1.0);
+    // Declare the output file
+    amr_task_output(task, "output.txt", 1.0);
     
-    // Use the default runner (an identity copy)
-    amr_task_default_runner(t);
-    amr_task_transform(t, "input.txt", "output.txt", NULL);
+    // Use the default runner (an identity byte-copy)
+    amr_task_default_runner(task);
+    amr_task_transform(task, "input.txt", "output.txt", NULL);
     
     return true;
 }
 
 int main(int argc, char **argv) {
-    // Initialize: 16 partitions, 4 CPUs, 1024 MB RAM
+    // Initialize: 16 total partitions, 4 CPU threads, 1024 MB RAM limit
     amr_t *sched = amr_init(argc, argv, 16, 4, 1024);
     
-    // Register the task
-    amr_task(sched, "hello_task", true, hello_setup);
+    // Register the task into the DAG
+    amr_task(sched, "copy_task", true, copy_setup);
 
-    // Execute the DAG
+    // Finalize the graph and execute
     if (!amr_run(sched, amr_worker_complete)) {
         fprintf(stderr, "DAG Execution Failed!\n");
         amr_destroy(sched);
@@ -72,125 +82,115 @@ int main(int argc, char **argv) {
 
 ---
 
-## 🔀 Common Data Flow Patterns (Topologies)
+## 🔀 Topology Patterns
 
-The true power of AMR lies in how you wire Tasks together. AMR provides different edge types to route your data across workers:
+The way you wire inputs dictates how data moves between worker boundaries. AMR provides explicit primitives for partitioned topologies:
 
 * **1-to-1 Pipelining (`_partition`)**
-* *Use Case:* Sequential mapping (parse -> enrich -> filter).
-* *Behavior:* Consumer Worker X reads exclusively from Producer Worker X. This provides perfect parallel isolation with zero network/shuffle overhead.
+* Consumer partition *X* reads exclusively from Producer partition *X*. Guarantees parallel isolation with zero cross-partition I/O overhead.
 
 
 * **The Global Shuffle (`_shuffle`)**
-* *Use Case:* Grouping data by a specific key (e.g., User ID or ASIN).
-* *Behavior:* The producer scatters its output into N hash buckets. Consumer X then gathers bucket X from all M producers.
+* The producer scatters its output into *N* hash buckets. Consumer partition *X* gathers bucket *X* from all upstream producers. Used for grouping data by a specific key.
 
 
-* **Distributed Broadcast (`_all_to_all`)**
-* *Use Case:* Matrix math or comparing every item against every other item.
-* *Behavior:* EVERY consumer worker reads ALL M producer files.
+* **Many-to-Many / All-to-All (`_all_to_all`)**
+* EVERY consumer partition reads ALL producer partitions. Used for matrix math or Cartesian products.
+
+
+* **Many-to-One / Global Gather (`_all_to_all` to 1 Partition)**
+* A specific application of the all-to-all primitive where the consumer task is configured with exactly `1` partition. Concatenates all upstream producer partitions into a single global stream.
 
 
 * **Map-Side Join / Read First (`_first`)**
-* *Use Case:* Broadcasting a small global dictionary to all workers.
-* *Behavior:* Every parallel consumer thread safely reads ONLY the file produced by producer Partition 0.
+* Every parallel consumer partition safely reads ONLY the file produced by producer Partition `0`. Used to broadcast a global dictionary.
 
 
 
 ---
 
-## 📦 The Datatype Registry & Type Safety
+## 📦 The Datatype Registry
 
-AMR abstracts away raw byte manipulation through a centralized type registry. Instead of manually casting `void*` buffers in every task, you register your C structs along with their serialization, deserialization, partitioning, and sorting rules.
-
-Once registered, the framework handles the disk I/O, routing, and sorting automatically:
+To use AMR's sorting and shuffling engines with structured binary records, you map your C structs into the framework using the registry.
 
 ```c
-// Register your type once during setup...
-amr_register_datatype(sched, "MyStruct", "Description", my_ser, my_des, my_to_string);
-amr_datatype_add_partition(sched, "MyStruct", "Hash_ID", my_hash_func);
-amr_datatype_add_compare(sched, "MyStruct", "Sort_Score_Desc", my_sort_func);
+// 1. Register the struct and its serialization rules
+amr_register_datatype(sched, "UserScore", "uint32 + double", 
+                      score_serialize, score_deserialize, score_to_string);
 
-// ...and use it anywhere in your DAG!
-amr_task_output_type(t, "MyStruct");
-amr_task_output_shuffle_by(t, "Hash_ID", NULL);
-amr_task_output_sort_by(t, "Sort_Score_Desc", NULL);
+// 2. Attach specific behaviors
+amr_datatype_add_partition(sched, "UserScore", "Hash_ID", hash_id_func);
+amr_datatype_add_compare(sched, "UserScore", "Sort_Score_Desc", sort_desc_func);
+
+// 3. Apply them to an output in your task setup
+amr_task_output_type(task, "UserScore");
+amr_task_output_shuffle_by(task, "Hash_ID", NULL);
+amr_task_output_sort_by(task, "Sort_Score_Desc", NULL);
 
 ```
 
-*Bonus: Because you register a `to_string` method, the built-in `--dump` and `--sample` CLI commands instantly know how to print your binary out-of-core files as human-readable text.*
+Registering a `to_string` method allows your binary artifacts to be rendered meaningfully by inspection tools such as `--dump` and `--sample`.
 
 ---
 
-## 🧩 Reusable Pipelines (Sub-Graphs)
+## ⚙️ Advanced Execution Semantics
 
-For complex applications, defining a single massive DAG in `main()` quickly becomes unmanageable. AMR solves this with **Pipelines**—allowing you to encapsulate a sequence of tasks into a reusable, modular sub-graph.
+* **Failure Modes:**
+* *Setup Phase:* Invalid graph topologies, unbound pipeline ports, and type mismatches fail fast during graph construction (typically triggering `abort()`).
+* *Execution Phase:* A custom `amr_worker_cb` can halt the DAG execution by returning `false`.
 
-Pipelines expose **logical input and output ports**, meaning the internal task implementations are completely hidden from the outside world. You wire pipelines together just like individual tasks:
 
-```c
-// Create a reusable enrichment sub-graph
-amr_pipeline_t *enrich_pipe = amr_pipeline_create(sched, "enrich", pipeline_enrich_setup, NULL);
-
-// Bind the pipeline's logical input port to an upstream task's physical output
-amr_pipeline_bind_input(enrich_pipe, "in_dict", "app_ingest_items", "items.dict");
-
-// Downstream tasks can consume straight from the pipeline's logical output port
-amr_task_input_from_pipeline_partition(t, enrich_pipe, "out_enriched", 0.5);
-
-```
-
----
-
-## ⚙️ Advanced Execution & I/O Optimizations
-
-AMR provides fine-grained control over how data is materialized, merged, and processed:
-
-* **Group Runners (`amr_group_runner_cb`):** Instead of processing one record at a time, AMR can feed your worker an array of all records that share the exact same key, making custom reducers and distributed joins trivial to implement.
-* **Direct In-Memory Merging:** When chaining tasks that require sorting, AMR optimizes away unnecessary disk I/O. Instead of writing a final, fully sorted file to disk only to immediately read it back, AMR performs a multi-way merge of the temporary sorted chunks directly into the RAM of the downstream task.
-* **In-Memory Distributed Cache:** Need to broadcast a small lookup table? Use `amr_task_input_load_into_memory(t)` to force AMR to read the entire partition into RAM before your worker starts, allowing for `O(1)` memory lookups during streaming joins.
+* **Garbage Collection:** Intermediate task outputs are automatically unlinked (deleted) based on downstream reference counting. Terminal outputs, or outputs explicitly flagged with `amr_task_output_keep()`, survive execution.
+* **The Sort-Merge Optimization:** If an intermediate pipe output is flagged for sorting, AMR bypasses writing the final sorted artifact to disk. Instead, the temporary sorted chunks are merged directly into the memory space of the consuming transform.
+* **In-Memory Broadcast Cache:** `amr_task_input_load_into_memory()` forces AMR to read an entire input partition into RAM before the worker starts, enabling `O(1)` lookups for map-side joins.
 
 ---
 
 ## 🛠️ The Built-In CLI
 
-When you build an AMR application, it automatically includes a powerful CLI for inspecting and debugging your data pipelines without changing your code.
+Every AMR executable automatically inherits a diagnostic CLI without requiring changes to your `main()` logic.
 
 **Execution Control:**
 
-* `-c <N>`, `--cpus <N>`: Override the number of CPU threads at runtime.
+* `-c <N>`, `--cpus <N>`: Override the number of CPU threads.
 * `-r <MB>`, `--ram <MB>`: Override the total RAM limit.
-* `-t <task[:partitions]>`: Run ONLY specific tasks/partitions (e.g., `-t reduce_pairs:0,2-4`).
-* `-f`, `--force`: Force tasks to run, bypassing the incremental cache.
+* `-t <tasks>`: Run ONLY specific tasks/partitions (e.g., `-t reduce_pairs:0,2-4`).
+* `-o`: Strict mode; only run tasks specified by `-t`, ignoring upstream cache invalidation.
+* `-f`, `--force`: Force tasks to run, bypassing `.ack` file timestamps.
+* `--run <N>`: Isolate the execution context to a specific run directory (`tasks/run_<N>/`).
+* `--new-args`: Overwrite the persisted `custom_args` cache file.
 
-**Inspection & Debugging:**
+**Inspection & Diagnostics (Forces cpus = 1):**
 
-* `-l`, `--list`: Print the DAG execution plan (resolving all logical ports and physical paths) and exit.
-* `-d`, `--dump <files>`: Print the human-readable contents of output files utilizing the registered type's `to_string` method.
-* `--sample <recs>:<parts>`: Efficiently peek into task outputs, report data skew (empty partitions), and dump N records from M randomly selected active partitions.
-* `--match <string>`: Lazily filter `--sample` and `--dump` outputs to only include records matching a specific substring.
+* `-l`, `--list`: Print the logical DAG execution plan and exit.
+* `-s`, `--show-files`: Print the execution plan along with all resolved physical file paths.
+* `-d`, `--dump <files>`: Print the human-readable contents of specific output files.
+* `--sample <recs>:<parts>`: Evaluate data skew and randomly sample *N* records from *M* active partitions.
+* `--match <str>`: Lazily filter `--sample` and `--dump` outputs to only include records matching a substring.
+* `--debug <task:partition> <dir>`: Run a single task partition in strict isolation, writing outputs to a custom directory.
+* `--keep-files`: Globally disable intermediate file garbage collection for this run.
 
 ---
 
 ## 📚 API Documentation
 
-The primary include for the framework, [`amr.h`](include/a-map-reduce-library/amr.h), is extensively documented. It serves as the definitive reference manual for the library.
+The primary include for the framework, [`amr.h`](include/a-map-reduce-library/amr.h), acts as the umbrella header. The API is divided into domain-specific sub-headers (`amr_core.h`, `amr_task.h`, `amr_worker.h`, etc.) which are extensively documented.
 
-Inside `amr.h`, you will find:
+Inside the headers, you will find:
 
 * Detailed explanations of the **Stateful Builder API**.
-* In-depth documentation on **Execution Lifecycle Gotchas** (caching, thread safety, garbage collection).
+* In-depth documentation on **Execution Lifecycle Constraints** (caching, thread safety, garbage collection).
 * Clear function contracts for every graph topology modifier, input/output configuration, and worker context accessor.
 
 ---
 
 ## 🧪 Learning by Example
 
-The repository includes a progressive set of examples in the `examples/` directory that demonstrate AMR features scaling from simple counts to billion-scale recommender systems.
+The repository includes a progressive set of examples in the `examples/` directory that demonstrate AMR features scaling from simple metrics to billion-scale recommender systems.
 
-1. **`01_word_count`**: The "Hello World" of MapReduce. Demonstrates basic file ingestion, network shuffles, local reduction (squashing duplicates), global gathering, and text formatting.
-2. **`02_streaming_recommender`**: A distributed merge-join pipeline. Demonstrates registering custom datatypes (`HalfEnriched`, `FullEnriched`), handling multi-input streams (`amr_task_io_transform`), and processing groups of records sharing the same key (`amr_task_group_transform`).
-3. **`03_pipeline_recommender`**: Introduces **Sub-Graphs**. Shows how to encapsulate the complex join logic from Example 02 into reusable, composable `amr_pipeline_t` modules.
-4. **`04_inverted_recommender`**: Billion-scale graph processing. Demonstrates string-to-integer encoding, generating Inverted Indexes (bipartite graphs), zero-shuffle optimization, and passing dynamic configurations into pipelines.
-5. **`05_complements_recommender`**: First-order cosine similarity math. Highlights the use of `amr_task_input_load_into_memory()` to broadcast a dense dictionary into a distributed in-memory cache for ultra-fast `O(1)` lookups.
+1. **`01_word_count`**: Demonstrates file ingestion, cross-partition shuffles, local reduction (squashing duplicates), global gathering, and text formatting.
+2. **`02_streaming_recommender`**: A partitioned merge-join pipeline showing custom datatypes (`HalfEnriched`, `FullEnriched`), multi-input streams (`amr_task_io_transform`), and grouped record processing (`amr_task_group_transform`).
+3. **`03_pipeline_recommender`**: Introduces **Sub-Graphs**. Shows how to encapsulate complex join logic into reusable, composable `amr_pipeline_t` modules.
+4. **`04_inverted_recommender`**: Billion-scale graph processing. Demonstrates string-to-integer encoding, generating bipartite graphs, zero-shuffle optimization, and passing dynamic configurations into pipelines.
+5. **`05_complements_recommender`**: First-order cosine similarity math. Highlights the use of `amr_task_input_load_into_memory()` to broadcast a dense dictionary into a partitioned in-memory cache.
 6. **`06_substitutes_recommender`**: Second-order TF-IDF weighting and L2 normalization. Demonstrates advanced mathematical reductions, custom state passing to workers (`amr_task_transform_data`), and highly complex graph traversals.

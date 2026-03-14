@@ -125,7 +125,7 @@ static int sp_cmp_ba(const io_record_t *a, const io_record_t *b, void *arg) {
  * ======================================================================== */
 static void sw_ser(const void *o, aml_buffer_t *bh) {
     const amr_string_weight_t *sw = (const amr_string_weight_t *)o;
-    aml_buffer_append(bh, &sw->weight, sizeof(double));
+    aml_buffer_append(bh, &sw->w, sizeof(double));
     aml_buffer_appends(bh, sw->str ? sw->str : "");
     aml_buffer_appendc(bh, '\0');
 }
@@ -133,13 +133,13 @@ static void* sw_des(aml_pool_t *p, const void *b, size_t l) {
     (void)l;
     amr_string_weight_t *sw = aml_pool_zalloc(p, sizeof(*sw));
     const char *ptr = (const char *)b;
-    memcpy(&sw->weight, ptr, sizeof(double));
+    memcpy(&sw->w, ptr, sizeof(double));
     sw->str = aml_pool_strdup(p, ptr + sizeof(double));
     return sw;
 }
 static void sw_str(const void *o, aml_buffer_t *bh) {
     const amr_string_weight_t *sw = (const amr_string_weight_t *)o;
-    aml_buffer_appendf(bh, "W: %.6f | Str: %s", sw->weight, sw->str);
+    aml_buffer_appendf(bh, "W: %.6f | Str: %s", sw->w, sw->str);
 }
 static size_t sw_part(const io_record_t *r, size_t np, void *arg) {
     return internal_hash_str((const char *)(r->record + sizeof(double))) % np;
@@ -166,7 +166,7 @@ static int sw_cmp_w_desc(const io_record_t *a, const io_record_t *b, void *arg) 
  * ======================================================================== */
 static void spw_ser(const void *o, aml_buffer_t *bh) {
     const amr_string_pair_weight_t *spw = (const amr_string_pair_weight_t *)o;
-    aml_buffer_append(bh, &spw->weight, sizeof(double));
+    aml_buffer_append(bh, &spw->w, sizeof(double));
     aml_buffer_appends(bh, spw->a ? spw->a : "");
     aml_buffer_appendc(bh, '\0');
     aml_buffer_appends(bh, spw->b ? spw->b : "");
@@ -176,14 +176,14 @@ static void* spw_des(aml_pool_t *p, const void *b, size_t l) {
     (void)l;
     amr_string_pair_weight_t *spw = aml_pool_zalloc(p, sizeof(*spw));
     const char *ptr = (const char *)b;
-    memcpy(&spw->weight, ptr, sizeof(double));
+    memcpy(&spw->w, ptr, sizeof(double));
     spw->a = aml_pool_strdup(p, spw_get_a(ptr));
     spw->b = aml_pool_strdup(p, spw_get_b(ptr));
     return spw;
 }
 static void spw_str(const void *o, aml_buffer_t *bh) {
     const amr_string_pair_weight_t *spw = (const amr_string_pair_weight_t *)o;
-    aml_buffer_appendf(bh, "W: %.6f | %s -> %s", spw->weight, spw->a, spw->b);
+    aml_buffer_appendf(bh, "W: %.6f | %s -> %s", spw->w, spw->a, spw->b);
 }
 
 /* StringPairWeight Partitions */
