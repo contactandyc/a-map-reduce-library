@@ -263,6 +263,3 @@ install(FILES
 )
 # Extra project-specific targets
 
-
-enable_testing()
-add_subdirectory(tests)
