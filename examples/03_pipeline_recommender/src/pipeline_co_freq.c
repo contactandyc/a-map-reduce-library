@@ -47,7 +47,7 @@ static bool reduce_pairs_setup(amr_task_t *t) {
     amr_task_output(t, "reduced_pairs.bin", 0.5);
     amr_task_output_type(t, "StringPairWeight");
     amr_task_output_sort_by(t, "Sort_A_B", NULL);
-    amr_task_output_reduce_by(t, "SumSPW", NULL);
+    amr_task_output_reduce_by(t, "Sum_W", NULL);
 
     amr_task_default_runner(t);
     amr_task_transform(t, "raw_pairs.bin", "reduced_pairs.bin", NULL);

@@ -3,114 +3,24 @@
 
 #include "a-map-reduce-library/amr.h"
 #include "a-map-reduce-library/amr_common_datatypes.h"
-#include "the-io-library/io.h"
-#include "the-io-library/io_in.h"
-#include "the-io-library/io_out.h"
 #include "a-json-library/ajson.h"
-
-// Include our custom pipelines!
-#include "pipeline_co_freq.h"
-#include "pipeline_enrich.h"
-
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 
+// Include our modular pipelines
+#include "pipeline_amazon.h"
+#include "pipeline_co_freq.h"
+#include "pipeline_enrich.h"
+
 static const char *ITEMS_FILE = "../data/amazon_2023/meta.jsonl";
 static const char *EVENTS_FILE = "../data/amazon_2023/reviews.jsonl";
 
-// Store globally so the formatting task can pull from the pipeline output
 static amr_pipeline_t *enrich_pipeline = NULL;
 
-static bool sum_spw_reducer(io_record_t *res, const io_record_t *r, size_t num_r, aml_buffer_t *bh, void *tag __attribute__((unused))) {
-    double total = 0.0;
-    for (size_t i = 0; i < num_r; i++) {
-        double w; memcpy(&w, r[i].record, sizeof(double));
-        total += w;
-    }
-    aml_buffer_clear(bh);
-    aml_buffer_append(bh, &total, sizeof(double));
-    size_t str_len = r[0].length - sizeof(double);
-    aml_buffer_append(bh, r[0].record + sizeof(double), str_len);
-    res->record = aml_buffer_data(bh);
-    res->length = aml_buffer_length(bh);
-    return true;
-}
-
 /* ================================================================
- * 1. DATA INGESTION
- * ================================================================ */
-static void items_json_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attribute__((unused)), io_out_t **outs, size_t num_outs __attribute__((unused))) {
-    aml_pool_t *pool = aml_pool_init(4096);
-    io_record_t *r;
-    while ((r = io_in_advance(ins[0])) != NULL) {
-        aml_pool_clear(pool);
-        aml_buffer_clear(amr_worker_buffer(w));
-        aml_buffer_append(amr_worker_buffer(w), r->record, r->length);
-        aml_buffer_appendc(amr_worker_buffer(w), '\0');
-
-        ajson_t *root = ajson_parse_string(pool, aml_buffer_data(amr_worker_buffer(w)));
-        if (!ajson_is_error(root)) {
-            char *asin = ajsono_get_strd(pool, root, "parent_asin", NULL);
-            char *title = ajsono_get_strd(pool, root, "title", NULL);
-            if (asin && title) {
-                amr_string_pair_t sp = { asin, title };
-                amr_worker_serialize(w, 0, outs[0], &sp);
-            }
-        }
-    }
-    aml_pool_destroy(pool);
-}
-
-static bool app_ingest_items_setup(amr_task_t *t) {
-    amr_task_input_files(t, ITEMS_FILE, 1.0, NULL);
-    amr_task_input_format(t, io_delimiter('\n'));
-    amr_task_output(t, "items.dict", 1.0);
-    amr_task_output_type(t, "StringPair");
-    amr_task_output_shuffle_by(t, "Hash_A", NULL);
-    amr_task_output_sort_by(t, "Sort_A", NULL);
-    amr_task_output_reduce_by_keeping_first(t);
-    amr_task_io_transform(t, ITEMS_FILE, "items.dict", items_json_runner);
-    return true;
-}
-
-static void events_json_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attribute__((unused)), io_out_t **outs, size_t num_outs __attribute__((unused))) {
-    aml_pool_t *pool = aml_pool_init(4096);
-    io_record_t *r;
-    while ((r = io_in_advance(ins[0])) != NULL) {
-        aml_pool_clear(pool);
-        aml_buffer_clear(amr_worker_buffer(w));
-        aml_buffer_append(amr_worker_buffer(w), r->record, r->length);
-        aml_buffer_appendc(amr_worker_buffer(w), '\0');
-
-        ajson_t *root = ajson_parse_string(pool, aml_buffer_data(amr_worker_buffer(w)));
-        if (!ajson_is_error(root)) {
-            char *uid  = ajsono_get_strd(pool, root, "user_id", NULL);
-            char *asin = ajsono_get_strd(pool, root, "parent_asin", NULL);
-            if (uid && asin) {
-                amr_string_pair_t sp = { uid, asin };
-                amr_worker_serialize(w, 0, outs[0], &sp);
-            }
-        }
-    }
-    aml_pool_destroy(pool);
-}
-
-static bool app_ingest_events_setup(amr_task_t *t) {
-    amr_task_input_files(t, EVENTS_FILE, 1.0, NULL);
-    amr_task_input_format(t, io_delimiter('\n'));
-    amr_task_output(t, "sessions.bin", 1.0);
-    amr_task_output_type(t, "StringPair");
-    amr_task_output_shuffle_by(t, "Hash_A", NULL);
-    amr_task_output_sort_by(t, "Sort_A_B", NULL);
-    amr_task_output_reduce_by_keeping_first(t);
-    amr_task_io_transform(t, EVENTS_FILE, "sessions.bin", events_json_runner);
-    return true;
-}
-
-/* ================================================================
- * 2. FINAL JSON FORMATTER
+ * FINAL JSON FORMATTER TASK
  * ================================================================ */
 static int fe_cmp_a(const io_record_t *rA, const io_record_t *rB, void *arg __attribute__((unused))) {
     const char *a1 = rA->record + sizeof(double);
@@ -147,8 +57,6 @@ static void format_json_runner(amr_worker_t *w, io_record_t *first, size_t num_r
 }
 
 static bool app_format_json_setup(amr_task_t *t) {
-    // Pull from the pipeline output port. The framework will now internally map
-    // the physical file but expose it to us under this exact alias!
     amr_task_input_from_pipeline_partition(t, enrich_pipeline, "out_enriched", 0.5);
     amr_task_input_expect_type(t, "FullEnriched");
 
@@ -160,7 +68,7 @@ static bool app_format_json_setup(amr_task_t *t) {
 }
 
 /* ================================================================
- * 3. MAIN EXECUTION
+ * MAIN EXECUTION
  * ================================================================ */
 int main(int argc, char **argv) {
     if (access(ITEMS_FILE, F_OK) != 0 || access(EVENTS_FILE, F_OK) != 0) {
@@ -175,29 +83,25 @@ int main(int argc, char **argv) {
     printf("[INFO] Starting Pipelined Recommender DAG. Partitions: %zu\n", parts);
 
     amr_t *sched = amr_init(argc - shift, argv + shift, parts, 12, 4096);
-
-    // Uncomment if you wish to preserve intermediate files
-    // amr_keep_intermediate_files(sched);
-
-    // Register basic dependencies for the pipelines
     amr_register_common_datatypes(sched);
-    amr_datatype_add_reducer(sched, "StringPairWeight", "SumSPW", sum_spw_reducer);
 
-    // 1. Setup App Data Extractors
-    amr_task(sched, "app_ingest_items",  true, app_ingest_items_setup);
-    amr_task(sched, "app_ingest_events", true, app_ingest_events_setup);
+    // 1. Initialize the Amazon Ingestion Pipeline with config
+    amazon_config_t amazon_cfg = { ITEMS_FILE, EVENTS_FILE };
+    amr_pipeline_t *amazon_pipe = amr_pipeline_create(sched, "amazon", pipeline_amazon_setup, &amazon_cfg);
 
-    // 2. Map the Pipelines
+    // 2. Initialize the Math Pipeline
     amr_pipeline_t *co_freq = amr_pipeline_create(sched, "co_freq", pipeline_co_freq_setup, NULL);
-    amr_pipeline_bind_input(co_freq, "in_sessions", "app_ingest_events", "sessions.bin");
+    amr_pipeline_bind_link(co_freq, "in_sessions", amazon_pipe, "out_sessions");
 
+    // 3. Initialize the Enrichment Pipeline
     enrich_pipeline = amr_pipeline_create(sched, "enrich", pipeline_enrich_setup, NULL);
     amr_pipeline_bind_link(enrich_pipeline, "in_pairs", co_freq, "out_pairs");
-    amr_pipeline_bind_input(enrich_pipeline, "in_dict", "app_ingest_items", "items.dict");
+    amr_pipeline_bind_link(enrich_pipeline, "in_dict",  amazon_pipe, "out_dict");
 
-    // 3. Final Formatter
+    // 4. Final Formatter Task
     amr_task(sched, "app_format_json", true, app_format_json_setup);
 
+    // Execute!
     bool success = amr_run(sched, amr_worker_complete);
     amr_destroy(sched);
 

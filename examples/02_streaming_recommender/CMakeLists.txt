@@ -15,6 +15,7 @@ find_package(a_memory_library CONFIG REQUIRED)
 find_package(the_macro_library CONFIG REQUIRED)
 find_package(a_map_reduce_library CONFIG REQUIRED)
 find_package(a_json_library CONFIG REQUIRED)
+find_package(a_json_sax_library CONFIG REQUIRED)
 
 # ---- Binaries ----
 add_executable(streaming_recommender  src/main.c)
@@ -34,7 +35,7 @@ if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
 endif()
 
 # Link the union of deps computed for this app context
-target_link_libraries(streaming_recommender PRIVATE  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library  a_map_reduce_library::a_map_reduce_library  a_json_library::a_json_library)
+target_link_libraries(streaming_recommender PRIVATE  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library  a_map_reduce_library::a_map_reduce_library  a_json_library::a_json_library  a_json_sax_library::a_json_sax_library)
 
 # Optional libm
 if(M_LIB)

@@ -114,30 +114,29 @@ static void register_custom_types(amr_t *sched) {
 /* ================================================================
  * 2. SHARED REDUCERS & UTILITIES
  * ================================================================ */
-
-static bool sum_spw_reducer(io_record_t *res, const io_record_t *r, size_t num_r, aml_buffer_t *bh, void *tag __attribute__((unused))) {
-    double total = 0.0;
-    for (size_t i = 0; i < num_r; i++) {
-        double w; memcpy(&w, r[i].record, sizeof(double));
-        total += w;
-    }
-    aml_buffer_clear(bh);
-    aml_buffer_append(bh, &total, sizeof(double));
-    size_t str_len = r[0].length - sizeof(double);
-    aml_buffer_append(bh, r[0].record + sizeof(double), str_len);
-    res->record = aml_buffer_data(bh);
-    res->length = aml_buffer_length(bh);
-    return true;
-}
-
 static int sp_cmp_a(const io_record_t *a, const io_record_t *b, void *arg __attribute__((unused))) {
     return strcmp((const char*)a->record, (const char*)b->record);
 }
 
 
 /* ================================================================
- * 3. DATA INGESTION
+ * 3. DATA INGESTION (Now with Scatter/Gather)
  * ================================================================ */
+
+// --- Items (Meta) ---
+static bool scatter_items_setup(amr_task_t *t) {
+    amr_task_input_files(t, ITEMS_FILE, 1.0, NULL);
+    amr_task_input_format(t, io_delimiter('\n'));
+    amr_task_output(t, "scattered_items.jsonl", 1.0);
+    amr_task_output_format(t, io_delimiter('\n'));
+
+    // Actively deal the lines out across the partition buckets!
+    amr_task_output_shuffle(t);
+
+    amr_task_default_runner(t);
+    amr_task_io_transform(t, ITEMS_FILE, "scattered_items.jsonl", NULL);
+    return true;
+}
 
 static void items_json_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attribute__((unused)), io_out_t **outs, size_t num_outs __attribute__((unused))) {
     aml_pool_t *pool = aml_pool_init(4096);
@@ -162,7 +161,8 @@ static void items_json_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __a
 }
 
 static bool app_ingest_items_setup(amr_task_t *t) {
-    amr_task_input_files(t, ITEMS_FILE, 1.0, NULL);
+    // Read from the newly scattered buckets in parallel!
+    amr_task_input_from_task_shuffle(t, "scatter_items", "scattered_items.jsonl", 1.0);
     amr_task_input_format(t, io_delimiter('\n'));
 
     // Output: Partitioned and sorted by ASIN. This is perfect for streaming joins!
@@ -172,7 +172,22 @@ static bool app_ingest_items_setup(amr_task_t *t) {
     amr_task_output_sort_by(t, "Sort_A", NULL);
     amr_task_output_reduce_by_keeping_first(t);
 
-    amr_task_io_transform(t, ITEMS_FILE, "items.dict", items_json_runner);
+    amr_task_io_transform(t, "scattered_items.jsonl", "items.dict", items_json_runner);
+    return true;
+}
+
+// --- Events (Reviews) ---
+static bool scatter_events_setup(amr_task_t *t) {
+    amr_task_input_files(t, EVENTS_FILE, 1.0, NULL);
+    amr_task_input_format(t, io_delimiter('\n'));
+    amr_task_output(t, "scattered_events.jsonl", 1.0);
+    amr_task_output_format(t, io_delimiter('\n'));
+
+    // Actively deal the lines out across the partition buckets!
+    amr_task_output_shuffle(t);
+
+    amr_task_default_runner(t);
+    amr_task_io_transform(t, EVENTS_FILE, "scattered_events.jsonl", NULL);
     return true;
 }
 
@@ -199,7 +214,8 @@ static void events_json_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __
 }
 
 static bool app_ingest_events_setup(amr_task_t *t) {
-    amr_task_input_files(t, EVENTS_FILE, 1.0, NULL);
+    // Read from the newly scattered buckets in parallel!
+    amr_task_input_from_task_shuffle(t, "scatter_events", "scattered_events.jsonl", 1.0);
     amr_task_input_format(t, io_delimiter('\n'));
 
     amr_task_output(t, "sessions.bin", 1.0);
@@ -208,7 +224,7 @@ static bool app_ingest_events_setup(amr_task_t *t) {
     amr_task_output_sort_by(t, "Sort_A_B", NULL);
     amr_task_output_reduce_by_keeping_first(t);
 
-    amr_task_io_transform(t, EVENTS_FILE, "sessions.bin", events_json_runner);
+    amr_task_io_transform(t, "scattered_events.jsonl", "sessions.bin", events_json_runner);
     return true;
 }
 
@@ -256,7 +272,7 @@ static bool reduce_pairs_setup(amr_task_t *t) {
     amr_task_output(t, "reduced_pairs.bin", 0.5);
     amr_task_output_type(t, "StringPairWeight");
     amr_task_output_sort_by(t, "Sort_A_B", NULL);
-    amr_task_output_reduce_by(t, "SumSPW", NULL);
+    amr_task_output_reduce_by(t, "Sum_W", NULL);
 
     amr_task_default_runner(t);
     amr_task_transform(t, "raw_pairs.bin", "reduced_pairs.bin", NULL);
@@ -270,7 +286,7 @@ static bool reduce_pairs_setup(amr_task_t *t) {
 // Filter weight >= 2.0 AND route by 'B' to align with items.dict for the first join
 static void route_b_runner(amr_worker_t *w, io_record_t *r, io_out_t **outs) {
     amr_string_pair_weight_t *spw = amr_worker_deserialize(w, 0, r);
-    if (spw->weight >= 2.0) {
+    if (spw->w >= 2.0) {
         amr_worker_serialize(w, 0, outs[0], spw);
     }
 }
@@ -316,7 +332,7 @@ static void join_b_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attri
             if (strcmp(item->a, spw->b) == 0) title_b = item->b;
         }
 
-        half_enriched_t out = { spw->weight, spw->a, spw->b, title_b };
+        half_enriched_t out = { spw->w, spw->a, spw->b, title_b };
         amr_worker_serialize(w, 0, outs[0], &out);
 
         r_spw = io_in_advance(ins[0]);
@@ -465,12 +481,13 @@ int main(int argc, char **argv) {
     // Uncomment if you wish to preserve intermediate files
     // amr_keep_intermediate_files(sched);
 
-
     amr_register_common_datatypes(sched);
-    amr_datatype_add_reducer(sched, "StringPairWeight", "SumSPW", sum_spw_reducer);
     register_custom_types(sched);
 
-    // Wire the DAG
+    // Wire the DAG: Add the new Singleton Scatter tasks!
+    amr_task(sched, "scatter_items",       false, scatter_items_setup);
+    amr_task(sched, "scatter_events",      false, scatter_events_setup);
+
     amr_task(sched, "app_ingest_items",    true, app_ingest_items_setup);
     amr_task(sched, "app_ingest_events",   true, app_ingest_events_setup);
 

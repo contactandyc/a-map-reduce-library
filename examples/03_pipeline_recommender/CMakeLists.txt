@@ -15,9 +15,10 @@ find_package(a_memory_library CONFIG REQUIRED)
 find_package(the_macro_library CONFIG REQUIRED)
 find_package(a_map_reduce_library CONFIG REQUIRED)
 find_package(a_json_library CONFIG REQUIRED)
+find_package(a_json_sax_library CONFIG REQUIRED)
 
 # ---- Binaries ----
-add_executable(pipeline_recommender  src/pipeline_co_freq.c  src/pipeline_enrich.c  src/main.c)
+add_executable(pipeline_recommender  src/main.c  src/pipeline_amazon.c  src/pipeline_enrich.c  src/pipeline_co_freq.c)
 
 target_include_directories(pipeline_recommender PRIVATE  ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -34,7 +35,7 @@ if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
 endif()
 
 # Link the union of deps computed for this app context
-target_link_libraries(pipeline_recommender PRIVATE  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library  a_map_reduce_library::a_map_reduce_library  a_json_library::a_json_library)
+target_link_libraries(pipeline_recommender PRIVATE  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library  a_map_reduce_library::a_map_reduce_library  a_json_library::a_json_library  a_json_sax_library::a_json_sax_library)
 
 # Optional libm
 if(M_LIB)
@@ -50,3 +51,36 @@ endif()
 
 # Install each app binary (handy for packaging examples)
 install(TARGETS pipeline_recommender RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+add_executable(pipeline_sax_recommender  src/main.c  src/pipeline_amazon_sax.c  src/pipeline_enrich.c  src/pipeline_co_freq.c)
+
+target_include_directories(pipeline_sax_recommender PRIVATE  ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Language standards
+set_target_properties(pipeline_sax_recommender PROPERTIES
+  C_STANDARD 23
+  C_STANDARD_REQUIRED YES
+)
+if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
+  set_target_properties(pipeline_sax_recommender PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+  )
+endif()
+
+# Link the union of deps computed for this app context
+target_link_libraries(pipeline_sax_recommender PRIVATE  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library  a_map_reduce_library::a_map_reduce_library  a_json_library::a_json_library  a_json_sax_library::a_json_sax_library)
+
+# Optional libm
+if(M_LIB)
+  target_link_libraries(pipeline_sax_recommender PRIVATE ${M_LIB})
+endif()
+
+# Warnings
+if(MSVC)
+  target_compile_options(pipeline_sax_recommender PRIVATE /W4)
+else()
+  target_compile_options(pipeline_sax_recommender PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Install each app binary (handy for packaging examples)
+install(TARGETS pipeline_sax_recommender RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

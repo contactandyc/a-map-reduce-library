@@ -95,7 +95,7 @@ static void register_types(amr_t *sched) {
 // --- Tasks ---
 static void route_b_runner(amr_worker_t *w, io_record_t *r, io_out_t **outs) {
     amr_string_pair_weight_t *spw = amr_worker_deserialize(w, 0, r);
-    if (spw->weight >= 2.0) {
+    if (spw->w >= 2.0) {
         amr_worker_serialize(w, 0, outs[0], spw);
     }
 }
@@ -129,7 +129,7 @@ static void join_b_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attri
             amr_string_pair_t *item = amr_worker_deserialize(w, 1, r_item);
             if (strcmp(item->a, spw->b) == 0) title_b = item->b;
         }
-        half_enriched_t out = { spw->weight, spw->a, spw->b, title_b };
+        half_enriched_t out = { spw->w, spw->a, spw->b, title_b };
         amr_worker_serialize(w, 0, outs[0], &out);
         r_spw = io_in_advance(ins[0]);
     }

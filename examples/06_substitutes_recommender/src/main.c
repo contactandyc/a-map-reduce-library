@@ -4,9 +4,13 @@
 #include "a-map-reduce-library/amr.h"
 #include "a-map-reduce-library/amr_common_datatypes.h"
 #include "the-io-library/io.h"
+#include "the-io-library/io_in.h"
+#include "the-io-library/io_out.h"
 #include "a-json-library/ajson.h"
 #include "a-memory-library/aml_pool.h"
 
+// Include all three pipelines!
+#include "pipeline_amazon.h"
 #include "pipeline_inv_freq.h"
 #include "pipeline_substitutes.h"
 
@@ -18,6 +22,7 @@
 static const char *ITEMS_FILE = "../data/amazon_2023/meta.jsonl";
 static const char *EVENTS_FILE = "../data/amazon_2023/reviews.jsonl";
 
+static amr_pipeline_t *amazon_pipe = NULL;
 static amr_pipeline_t *inv_freq = NULL;
 static amr_pipeline_t *pipe_subs = NULL;
 
@@ -32,7 +37,6 @@ static void meta_ser(const void *o, aml_buffer_t *bh) {
     aml_buffer_appends(bh, m->asin); aml_buffer_appendc(bh, '\0');
     aml_buffer_appends(bh, m->title); aml_buffer_appendc(bh, '\0');
 }
-
 static void* meta_des(aml_pool_t *p, const void *b, size_t l __attribute__((unused))) {
     item_meta_t *m = (item_meta_t *)aml_pool_zalloc(p, sizeof(*m));
     const char *ptr = (const char *)b;
@@ -41,85 +45,13 @@ static void* meta_des(aml_pool_t *p, const void *b, size_t l __attribute__((unus
     m->title = aml_pool_strdup(p, ptr);
     return m;
 }
-
 static void meta_str(const void *o, aml_buffer_t *bh) {
     const item_meta_t *m = (const item_meta_t *)o;
     aml_buffer_appendf(bh, "ID(%u) -> %s (%s)", m->id, m->asin, m->title);
 }
 
 /* ================================================================
- * 1. DATA INGESTION
- * ================================================================ */
-static void items_json_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attribute__((unused)), io_out_t **outs, size_t num_outs __attribute__((unused))) {
-    aml_pool_t *pool = aml_pool_init(4096);
-    io_record_t *r;
-    while ((r = io_in_advance(ins[0])) != NULL) {
-        aml_pool_clear(pool);
-        aml_buffer_clear(amr_worker_buffer(w));
-        aml_buffer_append(amr_worker_buffer(w), r->record, r->length);
-        aml_buffer_appendc(amr_worker_buffer(w), '\0');
-
-        ajson_t *root = ajson_parse_string(pool, aml_buffer_data(amr_worker_buffer(w)));
-        if (!ajson_is_error(root)) {
-            char *asin = ajsono_get_strd(pool, root, "parent_asin", NULL);
-            char *title = ajsono_get_strd(pool, root, "title", NULL);
-            if (asin && title) {
-                amr_string_pair_t sp = { asin, title };
-                amr_worker_serialize(w, 0, outs[0], &sp);
-            }
-        }
-    }
-    aml_pool_destroy(pool);
-}
-
-static bool app_ingest_items_setup(amr_task_t *t) {
-    amr_task_input_files(t, ITEMS_FILE, 1.0, NULL);
-    amr_task_input_format(t, io_delimiter('\n'));
-    amr_task_output(t, "items.dict", 1.0);
-    amr_task_output_type(t, "StringPair");
-    amr_task_output_shuffle_by(t, "Hash_A", NULL);
-    amr_task_output_sort_by(t, "Sort_A", NULL);
-    amr_task_output_reduce_by_keeping_first(t);
-    amr_task_io_transform(t, ITEMS_FILE, "items.dict", items_json_runner);
-    return true;
-}
-
-static void events_json_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attribute__((unused)), io_out_t **outs, size_t num_outs __attribute__((unused))) {
-    aml_pool_t *pool = aml_pool_init(4096);
-    io_record_t *r;
-    while ((r = io_in_advance(ins[0])) != NULL) {
-        aml_pool_clear(pool);
-        aml_buffer_clear(amr_worker_buffer(w));
-        aml_buffer_append(amr_worker_buffer(w), r->record, r->length);
-        aml_buffer_appendc(amr_worker_buffer(w), '\0');
-
-        ajson_t *root = ajson_parse_string(pool, aml_buffer_data(amr_worker_buffer(w)));
-        if (!ajson_is_error(root)) {
-            char *uid  = ajsono_get_strd(pool, root, "user_id", NULL);
-            char *asin = ajsono_get_strd(pool, root, "parent_asin", NULL);
-            if (uid && asin) {
-                amr_string_pair_t sp = { uid, asin };
-                amr_worker_serialize(w, 0, outs[0], &sp);
-            }
-        }
-    }
-    aml_pool_destroy(pool);
-}
-
-static bool app_ingest_events_setup(amr_task_t *t) {
-    amr_task_input_files(t, EVENTS_FILE, 1.0, NULL);
-    amr_task_input_format(t, io_delimiter('\n'));
-    amr_task_output(t, "sessions.bin", 1.0);
-    amr_task_output_type(t, "StringPair");
-    amr_task_output_shuffle_by(t, "Hash_A", NULL);
-    amr_task_output_sort_by(t, "Sort_A_B", NULL);
-    amr_task_output_reduce_by_keeping_first(t);
-    amr_task_io_transform(t, EVENTS_FILE, "sessions.bin", events_json_runner);
-    return true;
-}
-
-/* ================================================================
- * 2. LOCAL DICTIONARY JOIN
+ * 1. LOCAL DICTIONARY JOIN
  * ================================================================ */
 static void build_dense_dict_runner(amr_worker_t *w, io_in_t **ins, size_t num_ins __attribute__((unused)), io_out_t **outs, size_t num_outs __attribute__((unused))) {
     io_record_t *r_id = io_in_advance(ins[0]);
@@ -151,16 +83,20 @@ static void build_dense_dict_runner(amr_worker_t *w, io_in_t **ins, size_t num_i
 static bool build_dense_dict_setup(amr_task_t *t) {
     amr_task_input_from_pipeline_partition(t, inv_freq, "out_item_dict", 0.5);
     amr_task_input_expect_type(t, "IdStringPair");
-    amr_task_input_from_task_shuffle(t, "app_ingest_items", "items.dict", 0.5);
+
+    // Pull the raw ASIN->Title pairs straight from our modular Amazon pipeline
+    amr_task_input_from_pipeline_shuffle(t, amazon_pipe, "out_dict", 0.5);
     amr_task_input_expect_type(t, "StringPair");
+
     amr_task_output(t, "dense_dict.bin", 0.5);
     amr_task_output_type(t, "ItemMeta");
-    amr_task_io_transform(t, "out_item_dict|items.dict", "dense_dict.bin", build_dense_dict_runner);
+
+    amr_task_io_transform(t, "out_item_dict|out_dict", "dense_dict.bin", build_dense_dict_runner);
     return true;
 }
 
 /* ================================================================
- * 3. FORMATTING (SUBSTITUTES)
+ * 2. FORMATTING (SUBSTITUTES)
  * ================================================================ */
 typedef struct { item_meta_t **dict; uint32_t *counts; } format_ctx_t;
 
@@ -314,17 +250,20 @@ int main(int argc, char **argv) {
     amr_register_common_datatypes(sched);
     amr_register_datatype(sched, "ItemMeta", "Dense Dict", meta_ser, meta_des, meta_str);
 
-    amr_task(sched, "app_ingest_items",    true, app_ingest_items_setup);
-    amr_task(sched, "app_ingest_events",   true, app_ingest_events_setup);
+    // 1. Instantiate the modular Amazon SAX Ingestion Pipeline
+    amazon_config_t amazon_cfg = { ITEMS_FILE, EVENTS_FILE };
+    amazon_pipe = amr_pipeline_create(sched, "amazon", pipeline_amazon_setup, &amazon_cfg);
 
-    // FIX: Using the newly integrated struct correctly to maintain zero-shuffle
-    inv_freq_config_t cfg = { .min_overlap = 3, .out_mode = INV_FREQ_OUT_A_WDESC };
+    // 2. Fire up the Universal Indexing Engine
+    inv_freq_config_t cfg = { .min_overlap = 2, .out_mode = INV_FREQ_OUT_A_WDESC };
     inv_freq = amr_pipeline_create(sched, "inv_freq", pipeline_inv_freq_setup, &cfg);
-    amr_pipeline_bind_input(inv_freq, "in_sessions", "app_ingest_events", "sessions.bin");
+
+    // Bind the Amazon output to the Indexing engine
+    amr_pipeline_bind_link(inv_freq, "in_sessions", amazon_pipe, "out_sessions");
 
     amr_task(sched, "build_dense_dict", true, build_dense_dict_setup);
 
-    // Plug in the Substitutes Module!
+    // 3. Plug in the Substitutes Module!
     pipe_subs = amr_pipeline_create(sched, "substitutes", pipeline_substitutes_setup, NULL);
     amr_pipeline_bind_link(pipe_subs, "in_freqs", inv_freq, "out_freqs");
     amr_pipeline_bind_link(pipe_subs, "in_counts", inv_freq, "out_item_counts");

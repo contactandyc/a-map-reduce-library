@@ -598,6 +598,44 @@ static int idpws_cmp_b_wdesc(const io_record_t *rA, const io_record_t *rB, void 
     return 0;
 }
 
+/* ========================================================================
+ * SHARED REDUCERS
+ * ======================================================================== */
+
+/* A generic reducer for any type that starts with a `double w` and is followed
+   by an arbitrary length byte payload (e.g. StringWeight, StringPairWeight) */
+static bool common_sum_w_prefix_reducer(io_record_t *res, const io_record_t *r, size_t num_r, aml_buffer_t *bh, void *arg __attribute__((unused))) {
+    double total = 0.0;
+    for (size_t i = 0; i < num_r; i++) {
+        double w; memcpy(&w, r[i].record, sizeof(double));
+        total += w;
+    }
+    aml_buffer_clear(bh);
+    aml_buffer_append(bh, &total, sizeof(double));
+    size_t payload_len = r[0].length - sizeof(double);
+    aml_buffer_append(bh, r[0].record + sizeof(double), payload_len);
+    res->record = aml_buffer_data(bh);
+    res->length = aml_buffer_length(bh);
+    return true;
+}
+
+/* Reducer for IDPairWeight (where the double w is inside a fixed struct) */
+static bool idpw_sum_w_reducer(io_record_t *res, const io_record_t *r, size_t num_r, aml_buffer_t *bh, void *arg __attribute__((unused))) {
+    amr_id_pair_weight_t out;
+    memcpy(&out, r[0].record, sizeof(amr_id_pair_weight_t));
+    out.w = 0.0;
+    for (size_t i = 0; i < num_r; i++) {
+        amr_id_pair_weight_t tmp;
+        memcpy(&tmp, r[i].record, sizeof(amr_id_pair_weight_t));
+        out.w += tmp.w;
+    }
+    aml_buffer_clear(bh);
+    aml_buffer_append(bh, &out, sizeof(amr_id_pair_weight_t));
+    res->record = aml_buffer_data(bh);
+    res->length = aml_buffer_length(bh);
+    return true;
+}
+
 
 /* ========================================================================
  * MASTER REGISTRATION HOOK
@@ -628,6 +666,7 @@ void amr_register_common_datatypes(amr_t *sched) {
     amr_datatype_add_partition(sched, "StringWeight", "Hash_Str", sw_part);
     amr_datatype_add_compare(sched, "StringWeight", "Sort_Str", sw_cmp_str);
     amr_datatype_add_compare(sched, "StringWeight", "Sort_W_Desc", sw_cmp_w_desc);
+    amr_datatype_add_reducer(sched, "StringWeight", "Sum_W", common_sum_w_prefix_reducer);
 
     /* 4. StringPairWeight */
     amr_register_datatype(sched, "StringPairWeight", "W, A, B", spw_ser, spw_des, spw_str);
@@ -640,6 +679,7 @@ void amr_register_common_datatypes(amr_t *sched) {
     amr_datatype_add_compare(sched, "StringPairWeight", "Sort_A_B", spw_cmp_ab);
     amr_datatype_add_compare(sched, "StringPairWeight", "Sort_B_A", spw_cmp_ba);
     amr_datatype_add_compare(sched, "StringPairWeight", "Sort_W_Desc", spw_cmp_w_desc);
+    amr_datatype_add_reducer(sched, "StringPairWeight", "Sum_W", common_sum_w_prefix_reducer);
 
     /* 5. StringPairWeights (Plural) */
     amr_register_datatype(sched, "StringPairWeights", "W, AW, BW, A, B", spws_ser, spws_des, spws_str);
@@ -688,6 +728,7 @@ void amr_register_common_datatypes(amr_t *sched) {
     amr_datatype_add_compare(sched, "IDPairWeight", "Sort_A_WDesc", idpw_cmp_a_wdesc);
     amr_datatype_add_compare(sched, "IDPairWeight", "Sort_B_W", idpw_cmp_b_w);
     amr_datatype_add_compare(sched, "IDPairWeight", "Sort_B_WDesc", idpw_cmp_b_wdesc);
+    amr_datatype_add_reducer(sched, "IDPairWeight", "Sum_W", idpw_sum_w_reducer);
 
     /* 10. IDPairWeights */
     amr_register_datatype(sched, "IDPairWeights", "W, AW, BW, A, B (uint32)",
