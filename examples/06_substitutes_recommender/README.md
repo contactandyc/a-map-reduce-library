@@ -1,7 +1,3 @@
-Here is the objective, technically focused README for the `06_substitutes_recommender` pipeline.
-
----
-
 # Substitutes Recommender (MapReduce DAG)
 
 This project calculates "Substitutes" (competitor or alternative items) rather than "Complements" (items frequently bought together).

@@ -1,7 +1,3 @@
-Here is the README for the `04_inverted_recommender`. It captures the evolution from the string-based pairwise generation to the mathematically optimized, integer-based dual index architecture, as well as its new configurable geometry.
-
----
-
 # Inverted Index Recommender (MapReduce DAG)
 
 This project calculates "Frequently Bought Together" recommendations by completely overhauling the underlying mathematical engine.
