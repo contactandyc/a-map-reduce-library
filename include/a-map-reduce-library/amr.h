@@ -692,13 +692,15 @@ void amr_task_output_dont_compress_tmp(amr_task_t *task);
  * Context: [Setup | Main Thread]
  * ========================================================================
  *
- * MAGIC INHERITANCE RULE:
- * If you link an input to a previous task, the input AUTOMATICALLY inherits
- * the format, sort, and reducer configurations from the producer's output.
+ * ⚠️ THE MAGIC INHERITANCE RULE ⚠️
+ * If you link an input to a previous task (e.g., amr_task_input_from_task_*),
+ * the input AUTOMATICALLY inherits the format, sort, and reducer configurations
+ * from the producer's output.
  *
- * You only need to use the input configuration modifiers if:
- * 1. You are reading raw external files (`amr_task_input_files`).
- * 2. You want to apply a read-time reducer/sort that differs from the write-time.
+ * You ONLY need to use the input configuration modifiers below if:
+ * 1. You are reading raw external files via `amr_task_input_files()`.
+ * 2. You intentionally want to apply a read-time reducer/sort that differs
+ * from the upstream write-time configuration.
  * ======================================================================== */
 
 /* Syntax Sugar for Input Edges */
@@ -734,28 +736,48 @@ void amr_task_input_opaque(amr_task_t *task);
  * INPUT MODIFIERS
  * ------------------------------------------------------------------------ */
 
-/* Defines how the input stream is parsed (e.g., io_prefix(), io_delimiter('\n')). */
+/* Defines how the input stream is parsed (e.g., io_prefix(), io_delimiter('\n')).
+ * NOTE: Automatically inherited if wired to an upstream task. Only required
+ * for raw external files (amr_task_input_files). */
 void amr_task_input_format(amr_task_t *task, io_format_t format);
 
 /* Merge-sort multiple input streams using a registered strategy.
-   * @param arg An optional pointer passed directly to the underlying
-   * comparator callback as its 'tag' or state. Pass NULL if unused. */
+ * * IMPORTANT INHERITANCE: If this input is wired to a previous task (e.g.,
+ * amr_task_input_from_task_*), it AUTOMATICALLY inherits the upstream output's
+ * sort configuration. You ONLY need to call this if:
+ * 1. You are reading raw external files (amr_task_input_files).
+ * 2. You explicitly want to override the inherited write-time sort behavior.
+ *
+ * @param arg An optional pointer passed directly to the underlying
+ * comparator callback as its 'tag' or state. Pass NULL if unused. */
 void amr_task_input_sort_by(amr_task_t *task, const char *comparator_name, void *arg);
 
 /* Merge-sort multiple input streams using a raw C callback.
-   * @param arg Passed directly to the callback as its 'tag'. Pass NULL if unused. */
+ * * IMPORTANT INHERITANCE: Automatically inherited from upstream tasks. See
+ * amr_task_input_sort_by for details on when to use this.
+ *
+ * @param arg Passed directly to the callback as its 'tag'. Pass NULL if unused. */
 void amr_task_input_sort_with(amr_task_t *task, io_compare_cb compare, void *arg);
 
 /* Aggregate/combine records during a merge-sort read using a registered strategy.
-   * @param arg An optional pointer passed directly to the underlying
-   * reducer callback as its 'tag' or state. Pass NULL if unused. */
+ *
+ * IMPORTANT INHERITANCE: If this input is wired to a previous task, it
+ * AUTOMATICALLY inherits the upstream output's reducer. You ONLY need to call
+ * this to apply a read-time reducer to raw files, or to override the upstream reducer.
+ *
+ * @param arg An optional pointer passed directly to the underlying
+ * reducer callback as its 'tag' or state. Pass NULL if unused. */
 void amr_task_input_reduce_by(amr_task_t *task, const char *reducer_name, void *arg);
 
 /* Aggregate/combine records during a merge-sort read using a raw C callback.
-   * @param arg Passed directly to the callback as its 'tag'. Pass NULL if unused. */
+ *
+ * IMPORTANT INHERITANCE: Automatically inherited from upstream tasks. See
+ * amr_task_input_reduce_by for details on when to use this.
+ * * @param arg Passed directly to the callback as its 'tag'. Pass NULL if unused. */
 void amr_task_input_reduce_with(amr_task_t *task, io_reducer_cb reducer, void *arg);
 
-/* Shorthand to automatically drop duplicate records with the same sort key during a read. */
+/* Shorthand to automatically drop duplicate records with the same sort key during a read.
+ * NOTE: Automatically inherited from upstream tasks if they used this reducer. */
 void amr_task_input_reduce_by_keeping_first(amr_task_t *task);
 
 /* Registers a custom string-builder for this input so it can be viewed
