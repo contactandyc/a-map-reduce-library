@@ -30,6 +30,8 @@ io_file_info_t *file_info_prev_run_partition(amr_worker_t *w, size_t *num_files,
 io_file_info_t *file_info_prev_run_all_to_all(amr_worker_t *w, size_t *num_files, amr_worker_input_t *inp);
 io_file_info_t *file_info_prev_run_shuffle(amr_worker_t *w, size_t *num_files, amr_worker_input_t *inp);
 
+char *amr_worker_input_name_for_src(const amr_worker_t *w, const amr_worker_input_t *inp, const amr_worker_output_t *src, size_t partition);
+
 #ifdef __cplusplus
 }
 #endif

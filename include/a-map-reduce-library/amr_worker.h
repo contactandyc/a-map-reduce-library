@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025-2026 Andy Curtis <contactandyc@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 Andy worker_skip_output@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 #ifndef AMR_WORKER_H
@@ -99,6 +99,23 @@ io_partition_cb amr_worker_output_partition(amr_worker_t *w, size_t n);
 void *amr_worker_output_partition_arg(amr_worker_t *w, size_t n);
 io_reducer_cb amr_worker_output_reducer(amr_worker_t *w, size_t n);
 void *amr_worker_output_reducer_arg(amr_worker_t *w, size_t n);
+
+
+/* =========================================================================
+ * CONDITIONAL BRANCHING & DAG PRUNING
+ * ========================================================================= */
+
+/*
+ * Dynamically skips the specified local output port for this partition.
+ * * If an output is skipped, NO files are written to disk for it. More importantly,
+ * any downstream DAG tasks (or pipeline branches) that depend exclusively on
+ * this specific partition's output will be deliberately starved and skipped
+ * as well (Cascading Skips).
+ * * This is a control-flow toggle, not just a data toggle.
+ * * @param local_output_idx The local array index (0, 1, ...) corresponding to the
+ * output's position in the string passed to `amr_task_transform()`.
+ */
+void amr_worker_skip_output(amr_worker_t *w, size_t local_output_idx);
 
 #ifdef __cplusplus
 }
