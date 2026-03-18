@@ -40,6 +40,7 @@ typedef struct amr_pipeline_port_s amr_pipeline_port_t;
 #define AMR_OUTPUT_OPAQUE    (1u << 5)
 #define AMR_INPUT_OPAQUE     (1u << 6)
 #define AMR_OUTPUT_DIR       (1u << 7)
+#define AMR_OUTPUT_INTERNAL  (1u << 8)
 
 #define AMR_EDGE_ALL_TO_ALL  (1u << 0)
 #define AMR_EDGE_FIRST       (1u << 2)
@@ -108,7 +109,8 @@ struct amr_worker_input_s {
   void *dump_arg;
 
   amr_task_t *task;
-  amr_worker_output_t *src;
+  amr_worker_output_t **srcs;
+  size_t num_srcs;
   amr_worker_input_t *next;
 };
 
@@ -142,6 +144,8 @@ struct amr_worker_output_s {
 
 struct amr_task_state_link_s {
   bool waiting_on_others;
+  bool skipped;
+  uint64_t skipped_outputs_mask;
   amr_task_t *task;
   time_t ack_time;
   amr_task_state_link_t *next;
@@ -216,6 +220,9 @@ struct amr_worker_s {
   void *data;
   void *transform_data;
 
+  /* Tracks the active transform for local indices */
+  struct amr_transform_s *current_transform;
+
   /* --- Execution State (Read-Only) ---
      partition: The specific data slice ID this worker is handling (0 to num-1).
      num_partitions: Total number of partitions for the parent task.
@@ -229,6 +236,8 @@ struct amr_worker_s {
   size_t running;
   size_t thread_id;
   time_t ack_time;
+
+  uint64_t skipped_outputs_mask;
 
   /* Internal scheduler state (Do not modify) */
   amr_thread_t *schedule_thread;
@@ -305,6 +314,7 @@ struct amr_s {
 
   char *ack_dir;
   char *task_dir;
+  char *workspace_dir;
   bool use_runs; /* Added for iterative runs */
 
   size_t num_available;
@@ -343,6 +353,7 @@ struct amr_task_input_link_s {
 
 struct amr_transform_s {
   amr_worker_input_t **inputs;
+  amr_worker_output_t **internal_inputs;
   size_t num_inputs;
   amr_worker_output_t **outputs;
   size_t num_outputs;

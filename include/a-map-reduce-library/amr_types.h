@@ -71,13 +71,19 @@ void amr_datatype_add_reducer(amr_t *sched, const char *datatype_name, const cha
  * Context: [Runtime | Worker Thread]
  * ======================================================================== */
 
-/* Deserializes a raw record from the Nth input into a typed C struct.
- * LIFETIME: Memory is allocated in the worker's scratch pool and lives
+/* Deserializes a raw record into a typed C struct using LOCAL indices.
+ * * @param local_input_idx The local array index (0, 1, ...) corresponding to the
+ * input's position in the string passed to `amr_task_transform()`.
+ * (e.g., "inA|inB" -> inB is index 1).
+ * * LIFETIME: Memory is allocated in the worker's scratch pool and lives
  * until the next record/group. */
-void* amr_worker_deserialize(amr_worker_t *w, size_t input_idx, const io_record_t *r);
+void* amr_worker_deserialize(amr_worker_t *w, size_t local_input_idx, const io_record_t *r);
 
-/* Serializes a typed C struct and writes it immediately to the Nth output port. */
-void amr_worker_serialize(amr_worker_t *w, size_t output_idx, io_out_t *out, const void *obj);
+/* Serializes a typed C struct and writes it to the output port using LOCAL indices.
+ * * @param local_output_idx The local array index (0, 1, ...) corresponding to the
+ * output's position in the string passed to `amr_task_transform()`.
+ * (e.g., "outA|outB" -> outB is index 1). */
+void amr_worker_serialize(amr_worker_t *w, size_t local_output_idx, io_out_t *out, const void *obj);
 
 #ifdef __cplusplus
 }

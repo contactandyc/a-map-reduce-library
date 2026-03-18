@@ -77,38 +77,156 @@ size_t amr_worker_ram(amr_worker_t *w, double pct) {
   return (size_t)round((total * pct) / running) * 1024;
 }
 
+/* --- Path Generation --- */
+
+char *amr_worker_input_name_for_src(const amr_worker_t *w, const amr_worker_input_t *inp, const amr_worker_output_t *src, size_t partition) {
+  const char *base = src->name;
+  aml_buffer_t *bh = w->schedule_thread->bh;
+  aml_buffer_setf(bh, "%s/%s_%zu/", w->task->scheduler->task_dir,
+                  src->task->task_name, partition);
+
+  if (src->flags & AMR_WRITE_SHUFFLE) {
+    if (io_extension(base, "lz4")) {
+      aml_buffer_append(bh, base, strlen(base) - 4);
+      aml_buffer_appendf(bh, "_%zu_%zu.lz4", partition, w->partition);
+    } else if (io_extension(base, "gz")) {
+      aml_buffer_append(bh, base, strlen(base) - 3);
+      aml_buffer_appendf(bh, "_%zu_%zu.gz", partition, w->partition);
+    } else {
+      aml_buffer_appends(bh, base);
+      aml_buffer_appendf(bh, "_%zu_%zu", partition, w->partition);
+    }
+  } else {
+    if (io_extension(base, "lz4")) {
+      aml_buffer_append(bh, base, strlen(base) - 4);
+      aml_buffer_appendf(bh, "_%zu.lz4", partition);
+    } else if (io_extension(base, "gz")) {
+      aml_buffer_append(bh, base, strlen(base) - 3);
+      aml_buffer_appendf(bh, "_%zu.gz", partition);
+    } else {
+      aml_buffer_appends(bh, base);
+      aml_buffer_appendf(bh, "_%zu", partition);
+    }
+  }
+  return aml_pool_strdup(w->worker_pool, aml_buffer_data(bh));
+}
+
+char *amr_worker_input_name(const amr_worker_t *w, const amr_worker_input_t *inp, size_t partition) {
+  if (!inp || inp->num_srcs == 0) return NULL;
+  return amr_worker_input_name_for_src(w, inp, inp->srcs[0], partition);
+}
+
 /* --- File Info Strategies --- */
 
 io_file_info_t *file_info_shuffle(amr_worker_t *w, size_t *num_files, amr_worker_input_t *inp) {
-  size_t num_partitions = inp->src->task->num_partitions;
-  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res) * num_partitions);
-  for (size_t i = 0; i < num_partitions; i++) {
-    res[i].filename = amr_worker_input_name(w, inp, i);
-    res[i].tag = i;
-    io_file_info(res + i);
+  size_t valid_count = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    size_t num_partitions = inp->srcs[i]->task->num_partitions;
+    for (size_t p = 0; p < num_partitions; p++) {
+      amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[p];
+      if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) valid_count++;
+    }
   }
-  *num_files = num_partitions;
+
+  *num_files = valid_count;
+  if (valid_count == 0) return NULL;
+
+  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res) * valid_count);
+  size_t idx = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    size_t num_partitions = inp->srcs[i]->task->num_partitions;
+    for (size_t p = 0; p < num_partitions; p++) {
+      amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[p];
+      if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) {
+        res[idx].filename = amr_worker_input_name_for_src(w, inp, inp->srcs[i], p);
+        res[idx].tag = p;
+        io_file_info(&res[idx]);
+        idx++;
+      }
+    }
+  }
   return res;
 }
 
 io_file_info_t *file_info_all_to_all(amr_worker_t *w, size_t *num_files, amr_worker_input_t *inp) {
-  size_t num_partitions = inp->src->task->num_partitions;
-  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res) * num_partitions);
-  for (size_t i = 0; i < num_partitions; i++) {
-    res[i].filename = amr_worker_input_name(w, inp, i);
-    res[i].tag = i;
-    io_file_info(res + i);
+  size_t valid_count = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    size_t num_partitions = inp->srcs[i]->task->num_partitions;
+    for (size_t p = 0; p < num_partitions; p++) {
+      amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[p];
+      if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) valid_count++;
+    }
   }
-  *num_files = num_partitions;
+
+  *num_files = valid_count;
+  if (valid_count == 0) return NULL;
+
+  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res) * valid_count);
+  size_t idx = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    size_t num_partitions = inp->srcs[i]->task->num_partitions;
+    for (size_t p = 0; p < num_partitions; p++) {
+      amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[p];
+      if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) {
+        res[idx].filename = amr_worker_input_name_for_src(w, inp, inp->srcs[i], p);
+        res[idx].tag = p;
+        io_file_info(&res[idx]);
+        idx++;
+      }
+    }
+  }
   return res;
 }
 
 io_file_info_t *file_info_first(amr_worker_t *w, size_t *num_files, amr_worker_input_t *inp) {
-  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res));
-  res->filename = amr_worker_input_name(w, inp, 0);
-  res->tag = 0;
-  *num_files = 1;
-  io_file_info(res);
+  size_t valid_count = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[0];
+    if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) valid_count++;
+  }
+
+  *num_files = valid_count;
+  if (valid_count == 0) return NULL;
+
+  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res) * valid_count);
+  size_t idx = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[0];
+    if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) {
+        res[idx].filename = amr_worker_input_name_for_src(w, inp, inp->srcs[i], 0);
+        res[idx].tag = 0;
+        io_file_info(&res[idx]);
+        idx++;
+    }
+  }
+  return res;
+}
+
+io_file_info_t *file_info_partition(amr_worker_t *w, size_t *num_files, amr_worker_input_t *inp) {
+  size_t valid_count = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    size_t src_part = w->partition < inp->srcs[i]->task->num_partitions ? w->partition : 0;
+    amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[src_part];
+    if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) {
+        valid_count++;
+    }
+  }
+
+  *num_files = valid_count;
+  if (valid_count == 0) return NULL;
+
+  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res) * valid_count);
+  size_t idx = 0;
+  for (size_t i = 0; i < inp->num_srcs; i++) {
+    size_t src_part = w->partition < inp->srcs[i]->task->num_partitions ? w->partition : 0;
+    amr_task_state_link_t *st = &inp->srcs[i]->task->state_linkage[src_part];
+    if (!st->skipped && !(st->skipped_outputs_mask & (1ULL << inp->srcs[i]->id))) {
+        res[idx].filename = amr_worker_input_name_for_src(w, inp, inp->srcs[i], src_part);
+        res[idx].tag = w->partition;
+        io_file_info(&res[idx]);
+        idx++;
+    }
+  }
   return res;
 }
 
@@ -116,15 +234,6 @@ io_file_info_t *file_info_name(amr_worker_t *w, size_t *num_files, amr_worker_in
   io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res));
   res->filename = inp->name;
   res->tag = 0;
-  *num_files = 1;
-  io_file_info(res);
-  return res;
-}
-
-io_file_info_t *file_info_partition(amr_worker_t *w, size_t *num_files, amr_worker_input_t *inp) {
-  io_file_info_t *res = (io_file_info_t *)aml_pool_zalloc(w->worker_pool, sizeof(*res));
-  res->filename = amr_worker_input_name(w, inp, w->partition);
-  res->tag = w->partition;
   *num_files = 1;
   io_file_info(res);
   return res;
@@ -171,7 +280,9 @@ io_file_info_t *file_info_prev_run_all_to_all(amr_worker_t *w, size_t *num_files
 
 static char *amr_prev_run_shuffle_path(amr_worker_t *w, amr_worker_input_t *inp, size_t prod_partition) {
   aml_buffer_t *bh = w->schedule_thread->bh;
-  aml_buffer_setf(bh, "tasks/run_%zu/%s_%zu/", inp->prev_run, inp->prev_task_name, prod_partition);
+  aml_buffer_setf(bh, "%s/run_%zu/%s_%zu/",
+                  w->task->scheduler->workspace_dir, inp->prev_run,
+                  inp->prev_task_name, prod_partition);
   const char *base = inp->name;
   if (io_extension(base, "lz4")) {
     aml_buffer_append(bh, base, strlen(base) - 4);
@@ -370,7 +481,6 @@ amr_loaded_data_t *amr_worker_loaded_data_for_partition(amr_worker_t *w, size_t 
   return NULL;
 }
 
-/* --- Path Generation --- */
 
 static char *_amr_worker_output_base(const amr_worker_t *w, const amr_worker_output_t *outp,
                                      const char *suffix) {
@@ -447,38 +557,6 @@ char *amr_worker_output_params(amr_worker_t *w, size_t n) {
   return base;
 }
 
-char *amr_worker_input_name(const amr_worker_t *w, const amr_worker_input_t *inp, size_t partition) {
-  const char *base = inp->src->name;
-
-  aml_buffer_t *bh = w->schedule_thread->bh;
-  aml_buffer_setf(bh, "%s/%s_%zu/", w->task->scheduler->task_dir,
-                  inp->src->task->task_name, partition);
-  if (inp->src->flags & AMR_WRITE_SHUFFLE) {
-    if (io_extension(base, "lz4")) {
-      aml_buffer_append(bh, base, strlen(base) - 4);
-      aml_buffer_appendf(bh, "_%zu_%zu.lz4", partition, w->partition);
-    } else if (io_extension(base, "gz")) {
-      aml_buffer_append(bh, base, strlen(base) - 3);
-      aml_buffer_appendf(bh, "_%zu_%zu.gz", partition, w->partition);
-    } else {
-      aml_buffer_appends(bh, base);
-      aml_buffer_appendf(bh, "_%zu_%zu", partition, w->partition);
-    }
-  } else {
-    if (io_extension(base, "lz4")) {
-      aml_buffer_append(bh, base, strlen(base) - 4);
-      aml_buffer_appendf(bh, "_%zu.lz4", partition);
-    } else if (io_extension(base, "gz")) {
-      aml_buffer_append(bh, base, strlen(base) - 3);
-      aml_buffer_appendf(bh, "_%zu.gz", partition);
-    } else {
-      aml_buffer_appends(bh, base);
-      aml_buffer_appendf(bh, "_%zu", partition);
-    }
-  }
-  return aml_pool_strdup(w->worker_pool, aml_buffer_data(bh));
-}
-
 /* --- Internal Lifecycle & Utilities --- */
 
 void fill_inputs(amr_worker_t *w) {
@@ -496,27 +574,46 @@ amr_transform_t *clone_transforms(amr_worker_t *w) {
   amr_transform_t *head = NULL;
   amr_transform_t *tail = NULL;
   amr_transform_t *n = w->task->transforms;
+
   while (n) {
     if (!head)
-      head = tail =
-          (amr_transform_t *)aml_pool_dup(w->worker_pool, n, sizeof(*n));
+      head = tail = (amr_transform_t *)aml_pool_dup(w->worker_pool, n, sizeof(*n));
     else {
       tail->next = (amr_transform_t *)aml_pool_dup(w->worker_pool, n, sizeof(*n));
       tail = tail->next;
     }
 
-    if (tail->inputs) {
-      tail->inputs = (amr_worker_input_t **)aml_pool_alloc(
+    /* 1. Clone External Inputs (Safe against NULLs) */
+    if (n->inputs) {
+      tail->inputs = (amr_worker_input_t **)aml_pool_zalloc(
           w->worker_pool, sizeof(amr_worker_input_t *) * tail->num_inputs);
-      for (size_t i = 0; i < tail->num_inputs; i++)
-        tail->inputs[i] = amr_worker_input(w, n->inputs[i]->id);
+      for (size_t i = 0; i < tail->num_inputs; i++) {
+        if (n->inputs[i]) {
+            tail->inputs[i] = amr_worker_input(w, n->inputs[i]->id);
+        }
+      }
     }
 
-    if (tail->outputs) {
-      tail->outputs = (amr_worker_output_t **)aml_pool_alloc(
+    /* 2. Clone Internal Pipes (NEW) */
+    if (n->internal_inputs) {
+      tail->internal_inputs = (amr_worker_output_t **)aml_pool_zalloc(
+          w->worker_pool, sizeof(amr_worker_output_t *) * tail->num_inputs);
+      for (size_t i = 0; i < tail->num_inputs; i++) {
+        if (n->internal_inputs[i]) {
+            tail->internal_inputs[i] = amr_worker_output(w, n->internal_inputs[i]->id);
+        }
+      }
+    }
+
+    /* 3. Clone Outputs */
+    if (n->outputs) {
+      tail->outputs = (amr_worker_output_t **)aml_pool_zalloc(
           w->worker_pool, sizeof(amr_worker_output_t *) * tail->num_outputs);
-      for (size_t i = 0; i < tail->num_outputs; i++)
-        tail->outputs[i] = amr_worker_output(w, n->outputs[i]->id);
+      for (size_t i = 0; i < tail->num_outputs; i++) {
+        if (n->outputs[i]) {
+            tail->outputs[i] = amr_worker_output(w, n->outputs[i]->id);
+        }
+      }
     }
 
     tail->next = NULL;
@@ -566,7 +663,6 @@ void clone_inputs_and_outputs(amr_worker_t *w) {
 
 /* --- Diagnostic and Scanning Support --- */
 
-/* FIX 1: Allow Substring Search */
 static bool match_filename(const char *query, const char *path) {
   if (!strcmp(query, path)) return true;
   if (strstr(path, query) != NULL) return true;
@@ -584,7 +680,7 @@ static void dump_file(amr_worker_t *w, const char *filename,
 
   io_record_t *r;
   aml_buffer_t *bh = aml_buffer_init(1000);
-  size_t record_index = 0; // Starts at 0 to reflect raw file indices
+  size_t record_index = 0;
   bool print_extra = w->task->scheduler->parsed_args.prefix;
   const char *match = w->task->scheduler->parsed_args.sample_match;
   const char *printed_name = filename;
@@ -594,13 +690,12 @@ static void dump_file(amr_worker_t *w, const char *filename,
   while ((r = io_in_advance(in)) != NULL) {
     aml_buffer_clear(bh);
     dump(w, r, bh, dump_arg);
-    aml_buffer_appendc(bh, '\0'); // Ensure buffer is safely null-terminated
+    aml_buffer_appendc(bh, '\0');
 
-    // Predicate Pushdown: Check the match!
     if (match != NULL) {
         if (strstr(aml_buffer_data(bh), match) == NULL) {
             record_index++;
-            continue; // Skip silently
+            continue;
         }
     }
 
@@ -610,7 +705,6 @@ static void dump_file(amr_worker_t *w, const char *filename,
       printf("[%zu] ", record_index);
     }
 
-    // Print the buffer (stops at the \0 we appended)
     printf("%s\n", aml_buffer_data(bh));
     record_index++;
   }
@@ -618,7 +712,6 @@ static void dump_file(amr_worker_t *w, const char *filename,
   io_in_destroy(in);
 }
 
-/* FIX 2 & 3: Pass physical path instead of CLI arg, and stop zeroing files[i] */
 void scan_output(amr_worker_t *w, char **files, size_t num_files) {
   amr_worker_input_t *inp = w->inputs;
   while (inp) {
@@ -675,15 +768,12 @@ void amr_worker_dump_input(amr_worker_t *w, io_record_t *r, size_t n) {
     aml_buffer_clear(w->bh);
     inp->dump(w, r, w->bh, inp->dump_arg);
     printf("%s\n", aml_buffer_data(w->bh));
-  } else if (inp && inp->src->dump) {
+  } else if (inp && inp->num_srcs > 0 && inp->srcs[0] && inp->srcs[0]->dump) {
     aml_buffer_clear(w->bh);
-    inp->src->dump(w, r, w->bh, inp->src->dump_arg);
+    inp->srcs[0]->dump(w, r, w->bh, inp->srcs[0]->dump_arg);
     printf("%s\n", aml_buffer_data(w->bh));
   }
 }
-
-
-/* --- Opaque Artifact Utilities --- */
 
 char **amr_worker_opaque_inputs(amr_worker_t *w, size_t n, size_t *num_paths) {
   amr_worker_input_t *inp = amr_worker_input(w, n);
@@ -769,24 +859,22 @@ static void dump_file_limited(amr_worker_t *w, const char *filename,
 
   io_record_t *r;
   aml_buffer_t *bh = aml_buffer_init(1000);
-  size_t count = 0;        // Tracks how many successful matches we've printed
-  size_t record_index = 0; // Tracks our physical position in the file
+  size_t count = 0;
+  size_t record_index = 0;
   const char *match = w->task->scheduler->parsed_args.sample_match;
 
   while (count < limit && (r = io_in_advance(in)) != NULL) {
     aml_buffer_clear(bh);
     dump(w, r, bh, dump_arg);
-    aml_buffer_appendc(bh, '\0'); // Ensure buffer is safely null-terminated
+    aml_buffer_appendc(bh, '\0');
 
-    // Predicate Pushdown: Check the match!
     if (match != NULL) {
         if (strstr(aml_buffer_data(bh), match) == NULL) {
             record_index++;
-            continue; // Skip silently without incrementing `count`
+            continue;
         }
     }
 
-    // printf("[%zu] %s\n", record_index, aml_buffer_data(bh));
     printf("%s\n", aml_buffer_data(bh));
     count++;
     record_index++;
@@ -800,7 +888,6 @@ void scan_output_sample(amr_worker_t *w) {
   size_t sample_recs = w->task->scheduler->parsed_args.sample_records;
   size_t sample_parts = w->task->scheduler->parsed_args.sample_partitions;
 
-  /* Seed random once for the shuffling */
   static bool seeded = false;
   if (!seeded) {
     srand(time(NULL));
@@ -813,24 +900,19 @@ void scan_output_sample(amr_worker_t *w) {
       continue;
     }
 
-    /* M = Number of Producer Partitions */
     size_t M = o->task->num_partitions;
-    /* N = Number of Shuffle Buckets */
     size_t N = o->ext_options.num_partitions ? o->ext_options.num_partitions : w->task->scheduler->num_partitions;
 
     bool *is_empty = aml_pool_zalloc(w->pool, M * sizeof(bool));
     size_t *active_indices = aml_pool_alloc(w->pool, M * sizeof(size_t));
     size_t num_active = 0;
 
-    /* 1. Global Health Scan */
     for (size_t i = 0; i < M; i++) {
       aml_buffer_t *bh = w->schedule_thread->bh;
 
-      /* Build the base name used by worker 'i': name_i */
       const char *base = o->name;
       char *name_i;
 
-      /* USE w->pool FOR ALL ALLOCATIONS */
       if (io_extension(base, "lz4"))
         name_i = aml_pool_strdupf(w->pool, "%.*s_%zu.lz4", (int)strlen(base)-4, base, i);
       else if (io_extension(base, "gz"))
@@ -838,13 +920,11 @@ void scan_output_sample(amr_worker_t *w) {
       else
         name_i = aml_pool_strdupf(w->pool, "%s_%zu", base, i);
 
-      /* Build path to bucket 0 of partition i: tasks/task_i/name_i_0 */
       aml_buffer_setf(bh, "%s/%s_%zu/%s", w->task->scheduler->task_dir, w->task->task_name, i, name_i);
       char *path = aml_pool_strdup(w->pool, aml_buffer_data(bh));
 
       if (o->flags & AMR_WRITE_SHUFFLE) {
         path = aml_pool_alloc(w->pool, strlen(path) + 20);
-        /* Check bucket (i % N) to see if this partition produced records */
         io_out_partition_filename(path, aml_buffer_data(bh), i % N);
       }
 
@@ -861,7 +941,6 @@ void scan_output_sample(amr_worker_t *w) {
       if (in) io_in_destroy(in);
     }
 
-    /* 2. Format Ranges for Empty Partitions */
     aml_buffer_t *ranges = aml_buffer_init(256);
     bool first = true;
     size_t s = 0;
@@ -885,12 +964,10 @@ void scan_output_sample(amr_worker_t *w) {
     }
     aml_buffer_destroy(ranges);
 
-    /* 3. Sample from Active Partitions */
     if (num_active > 0) {
       size_t to_sample = (sample_parts < num_active) ? sample_parts : num_active;
       printf("SAMPLING: %zu records from %zu random active partitions...\n\n", sample_recs, to_sample);
 
-      /* Fisher-Yates shuffle active array */
       for (size_t i = num_active - 1; i > 0; i--) {
         size_t j = rand() % (i + 1);
         size_t t = active_indices[i];
@@ -902,7 +979,6 @@ void scan_output_sample(amr_worker_t *w) {
         size_t idx = active_indices[i];
         aml_buffer_t *bh = w->schedule_thread->bh;
 
-        /* Reconstruct full bucket path for sampling */
         const char *base = o->name;
         char *name_idx;
         if (io_extension(base, "lz4")) name_idx = aml_pool_strdupf(w->pool, "%.*s_%zu.lz4", (int)strlen(base)-4, base, idx);
@@ -931,28 +1007,45 @@ void scan_output_sample(amr_worker_t *w) {
 
 
 /* --- Type Registry Runtime Helpers --- */
+void* amr_worker_deserialize(amr_worker_t *w, size_t local_idx, const io_record_t *r) {
+    amr_transform_t *tr = w->current_transform;
+    amr_datatype_t *dt = NULL;
 
-void* amr_worker_deserialize(amr_worker_t *w, size_t input_idx, const io_record_t *r) {
-    amr_worker_input_t *inp = amr_worker_input(w, input_idx);
+    if (tr && local_idx < tr->num_inputs) {
+        if (tr->inputs && tr->inputs[local_idx]) {
+            // It's a standard external DAG input
+            dt = tr->inputs[local_idx]->datatype;
+        } else if (tr->internal_inputs && tr->internal_inputs[local_idx]) {
+            // It's an internal pipelined output! The datatype lives on the output definition.
+            dt = tr->internal_inputs[local_idx]->datatype;
+        }
+    }
 
-    if (!inp || !inp->datatype || !inp->datatype->deserialize) {
-        fprintf(stderr, "[ERROR] amr_worker_deserialize called on input %zu, but no type (or deserialize function) is registered.\n", input_idx);
+    if (!dt || !dt->deserialize) {
+        fprintf(stderr, "[ERROR] amr_worker_deserialize: No type registered for local input %zu.\n", local_idx);
         abort();
     }
 
-    return inp->datatype->deserialize(w->pool, r->record, r->length);
+    return dt->deserialize(w->pool, r->record, r->length);
 }
 
-void amr_worker_serialize(amr_worker_t *w, size_t output_idx, io_out_t *out, const void *obj) {
-    amr_worker_output_t *outp = amr_worker_output(w, output_idx);
+void amr_worker_serialize(amr_worker_t *w, size_t local_idx, io_out_t *out, const void *obj) {
+    amr_transform_t *tr = w->current_transform;
 
-    if (!outp || !outp->datatype || !outp->datatype->serialize) {
-        fprintf(stderr, "[ERROR] amr_worker_serialize called on output %zu, but no type (or serialize function) is registered.\n", output_idx);
+    if (!tr || local_idx >= tr->num_outputs || !tr->outputs[local_idx]) {
+        fprintf(stderr, "[ERROR] amr_worker_serialize: Invalid local output index %zu.\n", local_idx);
+        abort();
+    }
+
+    amr_datatype_t *dt = tr->outputs[local_idx]->datatype;
+
+    if (!dt || !dt->serialize) {
+        fprintf(stderr, "[ERROR] amr_worker_serialize: No type (or serialize function) registered for local output %zu.\n", local_idx);
         abort();
     }
 
     aml_buffer_clear(w->bh);
-    outp->datatype->serialize(obj, w->bh);
+    dt->serialize(obj, w->bh);
     io_out_write_record(out, aml_buffer_data(w->bh), aml_buffer_length(w->bh));
 }
 
@@ -1005,4 +1098,10 @@ io_reducer_cb amr_worker_output_reducer(amr_worker_t *w, size_t n) {
 void *amr_worker_output_reducer_arg(amr_worker_t *w, size_t n) {
     amr_worker_output_t *out = amr_worker_output(w, n);
     return out ? out->ext_options.reducer_arg : NULL;
+}
+
+void amr_worker_skip_output(amr_worker_t *w, size_t output_idx) {
+    if (output_idx < 64) {
+        w->skipped_outputs_mask |= (1ULL << output_idx);
+    }
 }

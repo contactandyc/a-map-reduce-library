@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
 
 void amr_task_default_runner(amr_task_t *task) { task->runner = in_out_runner; }
 
@@ -69,32 +70,45 @@ bool run_worker(amr_worker_t *w) {
 
 bool in_out_runner(amr_worker_t *w) {
   amr_transform_t *transforms = (amr_transform_t *)w->data;
-  io_in_t *in = NULL;
+
+  /* 1. Allocate the Pipe Stash (Sized by the maximum output ID) */
+  size_t max_out_id = 0;
+  for (amr_worker_output_t *o = w->task->outputs; o; o = o->next) {
+      if (o->id > max_out_id) max_out_id = o->id;
+  }
+  io_in_t **pipe_stash = (io_in_t **)aml_pool_zalloc(w->worker_pool, sizeof(io_in_t *) * (max_out_id + 1));
+
   while (transforms) {
+    w->current_transform = transforms;
     size_t num_outs = transforms->num_outputs;
-    size_t num_ins = transforms->num_inputs + (in ? 1 : 0);
+    size_t num_ins  = transforms->num_inputs;
     io_in_t **ins = NULL;
     amr_worker_input_t *inp = NULL;
+
     if (!num_ins) {
       ins = (io_in_t **)aml_pool_zalloc(w->worker_pool, sizeof(io_in_t *));
       ins[0] = io_in_empty();
     } else {
-      ins = (io_in_t **)aml_pool_zalloc(w->worker_pool,
-                                        sizeof(io_in_t *) * num_ins);
-      size_t ibase = 0;
-      if (in) {
-        ins[0] = in;
-        ibase = 1;
-      } else
-        inp = amr_worker_input(w, transforms->inputs[0]->id);
-      for (size_t i = ibase; i < num_ins; i++)
-        ins[i] = amr_worker_in(w, transforms->inputs[i - ibase]->id);
+      ins = (io_in_t **)aml_pool_zalloc(w->worker_pool, sizeof(io_in_t *) * num_ins);
+
+      if (transforms->inputs && transforms->inputs[0]) {
+          inp = amr_worker_input(w, transforms->inputs[0]->id);
+      }
+
+      for (size_t i = 0; i < num_ins; i++) {
+        if (transforms->inputs && transforms->inputs[i]) {
+            ins[i] = amr_worker_in(w, transforms->inputs[i]->id);
+        } else if (transforms->internal_inputs && transforms->internal_inputs[i]) {
+            size_t out_id = transforms->internal_inputs[i]->id;
+            ins[i] = pipe_stash[out_id];
+            pipe_stash[out_id] = NULL; /* Consume the pipe */
+        }
+      }
     }
-    io_out_t **outs = (io_out_t **)aml_pool_zalloc(
-        w->worker_pool, sizeof(io_out_t *) * num_outs);
+
+    io_out_t **outs = (io_out_t **)aml_pool_zalloc(w->worker_pool, sizeof(io_out_t *) * num_outs);
     for (size_t i = 0; i < num_outs; i++) {
       amr_worker_output_t *out_def = transforms->outputs[i];
-      // Check if the user wants an opaque/external artifact
       if (out_def->flags & AMR_OUTPUT_OPAQUE) {
         outs[i] = NULL;
       } else {
@@ -129,12 +143,12 @@ bool in_out_runner(amr_worker_t *w) {
       } else if (transforms->io_runner) {
         transforms->io_runner(w, ins, num_ins, outs, num_outs);
       } else {
-        if (inp && inp->src && inp->src->dump &&
+        if (inp && inp->num_srcs > 0 && inp->srcs[0] && inp->srcs[0]->dump &&
             w->task->scheduler->parsed_args.debug_dump_input) {
           aml_buffer_t *bh = aml_buffer_init(1000);
           while ((r = io_in_advance(ins[0])) != NULL) {
             aml_buffer_clear(bh);
-            inp->src->dump(w, r, bh, inp->dump_arg);
+            inp->srcs[0]->dump(w, r, bh, inp->srcs[0]->dump_arg);
             if (aml_buffer_length(bh))
               printf("%s\n", aml_buffer_data(bh));
             for (size_t i = 0; i < num_outs; i++)
@@ -157,7 +171,10 @@ bool in_out_runner(amr_worker_t *w) {
             compare_arg = transforms->create_group_compare_arg(w);
 
           io_in_options_t opts; io_in_options_init(&opts);
-          amr_worker_input_t *inp0 = amr_worker_input(w, transforms->inputs[0]->id);
+          amr_worker_input_t *inp0 = NULL;
+          if (transforms->inputs && transforms->inputs[0]) {
+              inp0 = amr_worker_input(w, transforms->inputs[0]->id);
+          }
           if (inp0) opts = inp0->options;
 
           io_in_t *ext = io_in_ext_init(transforms->group_compare, compare_arg, &opts);
@@ -188,26 +205,49 @@ bool in_out_runner(amr_worker_t *w) {
           abort();
       }
     }
-    for (size_t i = 0; i < num_ins; i++)
+
+    for (size_t i = 0; i < num_ins; i++) {
       if(ins[i]) io_in_destroy(ins[i]);
-    in = NULL;
+    }
+
     if (num_outs > 0) {
-      if (transforms->next) {
-        // If chaining transforms, we can only pipe standard outputs
-        if (outs[0]) {
-          in = io_out_in(outs[0]);
+      for (size_t i = 0; i < num_outs; i++) {
+        if (!outs[i]) continue;
+
+        /* Scan ahead: Does ANY downstream transform need to read this output? */
+        bool needed_downstream = false;
+        for (amr_transform_t *next_tr = transforms->next; next_tr; next_tr = next_tr->next) {
+            for (size_t j = 0; j < next_tr->num_inputs; j++) {
+                if (next_tr->internal_inputs && next_tr->internal_inputs[j] == transforms->outputs[i]) {
+                    needed_downstream = true;
+                    break;
+                }
+            }
+            if (needed_downstream) break;
         }
-      } else {
-        if (outs[0]) {
-          io_out_destroy(outs[0]);
-        }
-      }
-      for (size_t i = 1; i < num_outs; i++) {
-        if (outs[i]) {
-          io_out_destroy(outs[i]);
+
+        /* * PIPING & LIFECYCLE MANAGEMENT:
+         * If needed downstream, io_out_in() takes ownership. It flushes the writer,
+         * creates a reader, and GUARANTEES the file will be unlinked when the
+         * downstream reader is destroyed.
+         */
+        if (needed_downstream) {
+            pipe_stash[transforms->outputs[i]->id] = io_out_in(outs[i]);
+        } else {
+            /* * If not needed downstream, we just close the writer normally.
+             * However, if the user explicitly marked this as an INTERNAL artifact
+             * but never actually piped it anywhere, it becomes orphaned.
+             * We must manually unlink it here to prevent a disk leak.
+             */
+            io_out_destroy(outs[i]);
+            if (transforms->outputs[i]->flags & AMR_OUTPUT_INTERNAL) {
+                char *base_name = amr_worker_output_base(w, transforms->outputs[i]);
+                unlink(base_name);
+            }
         }
       }
     }
+
     if (transforms->destroy_data)
       transforms->destroy_data(w, w->transform_data);
 
@@ -217,15 +257,12 @@ bool in_out_runner(amr_worker_t *w) {
 }
 
 bool amr_worker_complete(amr_worker_t *w) {
-  // 1. Get current time with microsecond precision
   struct timeval tv;
   gettimeofday(&tv, NULL);
 
-  // 2. Convert to a thread-safe local time structure
   struct tm tm_info;
   localtime_r(&tv.tv_sec, &tm_info);
 
-  // 3. Extract the milliseconds
   int millis = tv.tv_usec / 1000;
 
   if (w->worker_pool) {

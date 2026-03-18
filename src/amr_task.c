@@ -161,13 +161,19 @@ static amr_worker_input_t *_amr_task_input(amr_task_t *task, const char *name,
   ti->name = aml_pool_strdup(pool, name);
   ti->ram_pct = pct;
   ti->task = task;
-  ti->src = src;
+
+  ti->srcs = NULL;
+  ti->num_srcs = 0;
+  if (src) {
+    ti->srcs = aml_pool_alloc(pool, sizeof(void*));
+    ti->srcs[0] = src;
+    ti->num_srcs = 1;
+    ti->options.format = src->options.format;
+  }
+
   ti->file_info = file_info;
   ti->edge_flags = AMR_EDGE_ALL_TO_ALL; /* Default to squaring the process */
 
-  if (src) {
-    ti->options.format = src->options.format;
-  }
   if (task->inputs) {
     amr_worker_input_t *n = task->inputs;
     while (n->next) n = n->next;
@@ -229,6 +235,12 @@ void amr_task_output(amr_task_t *task, const char *name, double out_ram_pct) {
 
   task->current_output = to;
   task->current_input = NULL;
+}
+
+void amr_task_output_internal(amr_task_t *task) {
+    if (task->current_output) {
+        task->current_output->flags |= AMR_OUTPUT_INTERNAL;
+    }
 }
 
 /* ========================================================================
@@ -533,12 +545,78 @@ static inline int _amr_count_edge_bits(size_t flags) {
   return n;
 }
 
+static void attach_input_to_output(amr_t *sched, amr_worker_output_t *out,
+                                   amr_worker_input_t  *ti, double in_ram_pct,
+                                   amr_task_t *consumer) {
+  size_t mode = ti->edge_flags;
+
+  if (mode & AMR_EDGE_SHUFFLE) {
+    out->flags |= AMR_WRITE_SHUFFLE;
+    if (out->ext_options.num_partitions == 0)
+      io_out_ext_options_num_partitions(&(out->ext_options), consumer->num_partitions);
+  }
+
+  amr_worker_output_t **new_srcs = aml_pool_alloc(sched->pool, sizeof(void*) * (ti->num_srcs + 1));
+  for(size_t i = 0; i < ti->num_srcs; i++) new_srcs[i] = ti->srcs[i];
+  new_srcs[ti->num_srcs] = out;
+  ti->srcs = new_srcs;
+  ti->num_srcs++;
+
+  if (ti->num_srcs == 1) {
+    ti->ram_pct        = (in_ram_pct > 0.0) ? in_ram_pct : 1.0;
+    ti->options.format = out->options.format;
+    ti->compare        = out->ext_options.compare;
+    ti->compare_arg    = out->ext_options.compare_arg;
+    ti->reducer        = out->ext_options.reducer;
+    ti->reducer_arg    = out->ext_options.reducer_arg;
+
+    if (out->datatype && !ti->datatype) {
+        ti->expected_type = out->type_name;
+        ti->datatype = out->datatype;
+        if (!ti->dump && out->dump) {
+            ti->dump = out->dump;
+            ti->dump_arg = out->dump_arg;
+        }
+    }
+  }
+
+  if      (mode & AMR_EDGE_SHUFFLE)     ti->file_info = file_info_shuffle;
+  else if (mode & AMR_EDGE_FIRST)       ti->file_info = file_info_first;
+  else if (mode & AMR_EDGE_PARTITION)   ti->file_info = file_info_partition;
+  else if (mode & AMR_EDGE_ALL_TO_ALL)  ti->file_info = file_info_all_to_all;
+  else abort();
+
+  if (mode & AMR_EDGE_PARTITION)
+    amr_task_partial_dependency(consumer, out->task->task_name);
+  else
+    amr_task_dependency(consumer, out->task->task_name);
+
+  if (mode & AMR_EDGE_FIRST) {
+    out->refcount_parts[0] += consumer->num_partitions;
+  } else if (mode & AMR_EDGE_PARTITION) {
+    for (size_t i = 0; i < out->num_partitions; i++)
+      out->refcount_parts[i] += 1;
+  } else if (mode & AMR_EDGE_SHUFFLE) {
+    size_t N = out->ext_options.num_partitions;
+    if (!out->refcount_buckets) {
+      out->refcount_buckets = aml_pool_zalloc(sched->pool, sizeof(size_t) * N);
+    }
+    for (size_t i = 0; i < N; i++) {
+      out->refcount_buckets[i] += 1;
+    }
+  } else if (mode & AMR_EDGE_ALL_TO_ALL) {
+    for (size_t i = 0; i < out->num_partitions; i++)
+      out->refcount_parts[i] += consumer->num_partitions;
+  } else {
+      abort();
+  }
+}
+
 void amr_task_input_from_task_mode(amr_task_t *consumer, const char *producer_task_name,
                                    const char *producer_output, const char *local_alias,
                                    double in_ram_pct, size_t edge_flags) {
   amr_t *sched = consumer->scheduler;
 
-  /* If NO topology bits are passed, inject the default ALL_TO_ALL bit */
   if ((edge_flags & AMR_EDGE_MASK) == 0) {
     edge_flags |= AMR_EDGE_ALL_TO_ALL;
   }
@@ -551,25 +629,34 @@ void amr_task_input_from_task_mode(amr_task_t *consumer, const char *producer_ta
 
   consumer->current_input = NULL;
 
-  // THE FIX: Register the input locally using the ALIAS, not the producer's physical name!
   const char *name_to_use = local_alias ? local_alias : producer_output;
-  amr_worker_input_t *ti = _amr_task_input(consumer, name_to_use, NULL, in_ram_pct, file_info_name);
+
+  /* --- THE FIX: Truncate at the first '|' so the stub has a valid name --- */
+  char *stub_name = aml_pool_strdup(sched->pool, name_to_use);
+  char *pipe_ptr = strchr(stub_name, '|');
+  if (pipe_ptr) *pipe_ptr = '\0';
+
+  amr_worker_input_t *ti = _amr_task_input(consumer, stub_name, NULL, in_ram_pct, file_info_name);
   ti->edge_flags = edge_flags;
 
   amr_task_input_link_t *link = (amr_task_input_link_t*)aml_pool_alloc(sched->pool, sizeof(*link));
   link->input = ti; link->next = consumer->current_input;
   consumer->current_input = link;
 
-  amr_pending_edge_t *e = aml_pool_zalloc(sched->pool, sizeof(*e));
-  e->producer_task_name = aml_pool_strdup(sched->pool, producer_task_name);
+  size_t num_prods = 0, num_outs = 0;
+  char **prod_tasks = aml_pool_split2(sched->pool, &num_prods, '|', producer_task_name);
+  char **prod_outs  = aml_pool_split2(sched->pool, &num_outs, '|', producer_output);
 
-  // THE FIX: Tell the DAG resolver to find the exact physical output on the producer!
-  e->output_name        = aml_pool_strdup(sched->pool, producer_output);
-  e->consumer           = consumer;
-  e->input_stub         = ti;
-  e->in_ram_pct         = in_ram_pct;
-  e->next               = sched->pending_edges;
-  sched->pending_edges  = e;
+  for (size_t i = 0; i < num_prods; i++) {
+    amr_pending_edge_t *e = aml_pool_zalloc(sched->pool, sizeof(*e));
+    e->producer_task_name = aml_pool_strdup(sched->pool, prod_tasks[i]);
+    e->output_name = aml_pool_strdup(sched->pool, prod_outs[i < num_outs ? i : 0]);
+    e->consumer = consumer;
+    e->input_stub = ti;
+    e->in_ram_pct = in_ram_pct;
+    e->next = sched->pending_edges;
+    sched->pending_edges = e;
+  }
 }
 
 void amr_task_input_from_task_first(amr_task_t *c, const char *prod, const char *out, double pct) {
@@ -607,70 +694,6 @@ void ensure_outputs_for_transforms(amr_t *sched) {
         }
       }
     }
-  }
-}
-
-static void attach_input_to_output(amr_t *sched, amr_worker_output_t *out,
-                                   amr_worker_input_t  *ti, double in_ram_pct,
-                                   amr_task_t *consumer) {
-  size_t mode = ti->edge_flags;
-
-  if (mode & AMR_EDGE_SHUFFLE) {
-    out->flags |= AMR_WRITE_SHUFFLE;
-    if (out->ext_options.num_partitions == 0)
-      io_out_ext_options_num_partitions(&(out->ext_options), consumer->num_partitions);
-  }
-
-  ti->ram_pct        = (in_ram_pct > 0.0) ? in_ram_pct : 1.0;
-  ti->options.format = out->options.format;
-  ti->compare        = out->ext_options.compare;
-  ti->compare_arg    = out->ext_options.compare_arg;
-  ti->reducer        = out->ext_options.reducer;
-  ti->reducer_arg    = out->ext_options.reducer_arg;
-  ti->src            = out;
-
-  /* Inherit the Type and Dumper from the Producer! */
-  if (out->datatype && !ti->datatype) {
-      ti->expected_type = out->type_name;
-      ti->datatype = out->datatype;
-
-      // Inherit the dump behavior if the consumer didn't override it
-      if (!ti->dump && out->dump) {
-          ti->dump = out->dump;
-          ti->dump_arg = out->dump_arg;
-      }
-  }
-
-  if      (mode & AMR_EDGE_SHUFFLE)     ti->file_info = file_info_shuffle;
-  else if (mode & AMR_EDGE_FIRST)       ti->file_info = file_info_first;
-  else if (mode & AMR_EDGE_PARTITION)   ti->file_info = file_info_partition;
-  else if (mode & AMR_EDGE_ALL_TO_ALL)  ti->file_info = file_info_all_to_all;
-  else abort(); /* Defensive guard */
-
-  if (mode & AMR_EDGE_PARTITION)
-    amr_task_partial_dependency(consumer, out->task->task_name);
-  else
-    amr_task_dependency(consumer, out->task->task_name);
-
-  /* Set up the deletion reference counts based on the topology */
-  if (mode & AMR_EDGE_FIRST) {
-    out->refcount_parts[0] += consumer->num_partitions;
-  } else if (mode & AMR_EDGE_PARTITION) {
-    for (size_t i = 0; i < out->num_partitions; i++)
-      out->refcount_parts[i] += 1;
-  } else if (mode & AMR_EDGE_SHUFFLE) {
-    size_t N = out->ext_options.num_partitions;
-    if (!out->refcount_buckets) {
-      out->refcount_buckets = aml_pool_zalloc(sched->pool, sizeof(size_t) * N);
-    }
-    for (size_t i = 0; i < N; i++) {
-      out->refcount_buckets[i] += 1;
-    }
-  } else if (mode & AMR_EDGE_ALL_TO_ALL) {
-    for (size_t i = 0; i < out->num_partitions; i++)
-      out->refcount_parts[i] += consumer->num_partitions;
-  } else {
-      abort(); /* Defensive guard */
   }
 }
 
@@ -767,15 +790,35 @@ void validate_partitions(amr_t *sched) {
 void resolve_transforms(amr_t *sched) {
   for (amr_task_t *t = sched->head; t; t = t->next) {
     for (amr_transform_t *tr = t->transforms; tr; tr = tr->next) {
+      /* Allocate the parallel tracking array for internal pipes */
+      if (tr->num_inputs > 0 && !tr->internal_inputs) {
+          tr->internal_inputs = aml_pool_zalloc(sched->pool, sizeof(amr_worker_output_t *) * tr->num_inputs);
+      }
+
       for (size_t i = 0; i < tr->num_inputs; i++) {
-        if (!tr->inputs[i] && tr->input_names[i]) {
-          tr->inputs[i] = amr_task_find_input(t, tr->input_names[i]);
-          if (!tr->inputs[i]) {
-            fprintf(stderr, "Unresolved input '%s' for task %s\n", tr->input_names[i], t->task_name);
-            abort();
+        if (!tr->inputs[i] && !tr->internal_inputs[i] && tr->input_names[i]) {
+          amr_worker_input_t *ext_inp = amr_task_find_input(t, tr->input_names[i]);
+
+          if (ext_inp) {
+            // 1. It's a standard external input from the DAG
+            tr->inputs[i] = ext_inp;
+          } else {
+            // 2. Is it an internal pipe?
+            amr_worker_output_t *int_out = amr_task_find_output(t, tr->input_names[i]);
+            if (int_out) {
+                if (int_out->flags & AMR_WRITE_SHUFFLE) {
+                    fprintf(stderr, "[ERROR] Task '%s' tried to pipe a SHUFFLED output ('%s') internally. Shuffles must cross a DAG boundary!\n", t->task_name, int_out->name);
+                    abort();
+                }
+                tr->internal_inputs[i] = int_out;
+            } else {
+                fprintf(stderr, "[ERROR] Unresolved input '%s' for task %s\n", tr->input_names[i], t->task_name);
+                abort();
+            }
           }
         }
       }
+
       for (size_t i = 0; i < tr->num_outputs; i++) {
         if (!tr->outputs[i] && tr->output_names[i]) {
           for (amr_worker_output_t *out = t->outputs; out; out = out->next) {
