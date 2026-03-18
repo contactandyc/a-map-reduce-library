@@ -73,7 +73,13 @@ extern "C" {
  * `abort()`. Execution errors in custom `amr_worker_cb` tasks should be
  * reported by returning `false` to safely halt the DAG.
  *
- * 8. Output Retention & Garbage Collection:
+ * 8. Conditional Branching & DAG Pruning:
+ * You can dynamically alter execution flow by calling `amr_worker_skip_output`
+ * inside a runner. If a producer skips an output, the DAG explicitly prunes
+ * downstream paths. Consumers relying solely on that skipped artifact will be
+ * "starved" and skipped automatically to save CPU.
+ *
+ * 9. Output Retention & Garbage Collection:
  * Intermediate task outputs are automatically unlinked (deleted) based on
  * downstream reference counting. Terminal outputs always survive.
  * Temporary sort-merge scratch files are strictly managed by the I/O layer.
@@ -210,6 +216,13 @@ typedef bool (*amr_finish_args_cb)(int argc, char **argv, void *arg);
  * @param ram Total system RAM in Megabytes available for the framework.
  */
 amr_t *amr_init(int argc, char **argv, size_t num_partitions, size_t cpus, size_t ram);
+
+/*
+ * Overrides the default "tasks" workspace directory.
+ * Useful for pointing I/O at dedicated scratch disks or RAM disks.
+ * MUST be called before amr_run().
+ */
+void amr_set_workspace_dir(amr_t *sched, const char *path);
 
 /* Context: [Init | Main Thread]
  * Fires the DAG. Resolves dependencies, allocates RAM, spawns threads.

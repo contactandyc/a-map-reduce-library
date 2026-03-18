@@ -63,6 +63,11 @@ void *amr_task_custom_arg(amr_task_t *task) {
   return task->scheduler->parse_args_arg;
 }
 
+void amr_set_workspace_dir(amr_t *h, const char *path) {
+    if (!h || !path) return;
+    h->workspace_dir = aml_pool_strdup(h->pool, path);
+}
+
 amr_t *amr_init(int argc, char **args, size_t num_partitions,
                                 size_t cpus, size_t ram) {
   size_t disk_space = 1000; // not really used at the moment
@@ -84,6 +89,7 @@ amr_t *amr_init(int argc, char **args, size_t num_partitions,
   h->disk_space = disk_space * 1024;
   h->pool = pool;
   h->tmp_pool = aml_pool_init(4096);
+  h->workspace_dir = (char *)"tasks";
   h->args = argc > 0 ? aml_pool_strdupan(pool, args, argc) : NULL;
   h->argc = argc > 0 ? argc : 0;
   return h;
@@ -106,7 +112,7 @@ void amr_use_runs(amr_t *h) {
   h->parsed_args.run_number = run_num;
 
   if (!h->task_dir) {
-    h->task_dir = aml_pool_strdupf(h->pool, "tasks/run_%zu", run_num);
+    h->task_dir = aml_pool_strdupf(h->pool, "%s/run_%zu", h->workspace_dir, run_num);
   }
 }
 
@@ -178,7 +184,7 @@ void link_state(amr_t *h, amr_task_state_link_t *state,
 static void mark_task_complete(amr_worker_t *w,
                                amr_task_state_link_t *state_link,
                                size_t partition, time_t when);
-static bool is_dependencies_complete(amr_task_t *task, size_t partition);
+static int evaluate_dependencies(amr_task_t *task, size_t partition);
 
 static amr_worker_t *take_worker(amr_t *scheduler, aml_pool_t *pool,
                                 amr_task_t *task, size_t partition) {
@@ -223,7 +229,7 @@ static void get_ack_time_for_task(amr_task_t *task) {
 }
 
 static void schedule_setup(amr_t *h) {
-  if (!h->task_dir) h->task_dir = (char *)"tasks";
+  if (!h->task_dir) h->task_dir = h->workspace_dir;
   if (!h->ack_dir)  h->ack_dir  = aml_pool_strdupf(h->pool, "%s/ack", h->task_dir);
 
   aml_buffer_t *bh = aml_buffer_init(100);
@@ -291,7 +297,7 @@ static void schedule_setup(amr_t *h) {
   // (5.5) Initialize dependency queues to enforce DAG execution
   for (amr_task_t *n = h->head; n; n = n->next) {
     for (size_t i = 0; i < n->num_partitions; i++) {
-      if (!is_dependencies_complete(n, i)) {
+      if (evaluate_dependencies(n, i) != 1) {
         unlink_state(h, n->state_linkage + i, i);
         n->state_linkage[i].waiting_on_others = true;
         link_state(h, n->state_linkage + i, i);
@@ -304,7 +310,7 @@ static void schedule_setup(amr_t *h) {
   for (amr_task_t *n = h->head; n; n = n->next) {
     if (n->do_nothing) {
       for (size_t i = 0; i < n->num_partitions; i++) {
-        if (is_dependencies_complete(n, i)) {
+        if (evaluate_dependencies(n, i) == 1) {
           aml_pool_clear(h->tmp_pool);
           amr_worker_t *w = take_worker(h, h->tmp_pool, n, i);
           if (w) mark_task_complete(w, w->state_link, i, now);
@@ -341,10 +347,77 @@ static void write_ack(amr_worker_t *w) {
   char *filename = aml_pool_strdupf(w->schedule_thread->pool, "%s/%s_%zu",
                                    w->task->scheduler->ack_dir,
                                    w->task->task_name, w->partition);
+  FILE *out = fopen(filename, "wb");
+  if (out) {
+      uint64_t end_time_ns = macro_now();
+      uint64_t start_time_ns = end_time_ns - w->elapsed_ns;
+
+      // Use the worker's dedicated scratch buffer. It's safe because the task is done.
+      aml_buffer_t *bh = w->bh;
+      aml_buffer_clear(bh);
+
+      aml_buffer_appendf(bh, "{\n");
+      aml_buffer_appendf(bh, "  \"task\": \"%s\",\n", w->task->task_name);
+      aml_buffer_appendf(bh, "  \"partition\": %zu,\n", w->partition);
+      aml_buffer_appendf(bh, "  \"thread_id\": %zu,\n", w->thread_id);
+      aml_buffer_appendf(bh, "  \"skipped_outputs_mask\": %llu,\n", (unsigned long long)w->skipped_outputs_mask);
+      aml_buffer_appendf(bh, "  \"start_time_ns\": %llu,\n", (unsigned long long)start_time_ns);
+      aml_buffer_appendf(bh, "  \"elapsed_ns\": %llu,\n", (unsigned long long)w->elapsed_ns);
+
+      aml_buffer_appendf(bh, "  \"inputs\": [\n");
+      bool first_input = true;
+
+      for (amr_worker_input_t *inp = w->inputs; inp; inp = inp->next) {
+          for (size_t s = 0; s < inp->num_srcs; s++) {
+              amr_worker_output_t *src = inp->srcs[s];
+              if (!src) continue;
+
+              size_t src_part = w->partition < src->task->num_partitions ? w->partition : 0;
+              amr_task_state_link_t *prod_st = &src->task->state_linkage[src_part];
+
+              if (!prod_st->skipped && !(prod_st->skipped_outputs_mask & (1ULL << src->id))) {
+                  // This uses w->schedule_thread->bh, safely avoiding our w->bh!
+                  char *in_path = amr_worker_input_name_for_src(w, inp, src, src_part);
+                  if (!first_input) aml_buffer_appendf(bh, ",\n");
+                  aml_buffer_appendf(bh, "    \"%s\"", in_path);
+                  first_input = false;
+              }
+          }
+      }
+
+      aml_buffer_appendf(bh, "\n  ]\n}\n");
+
+      // One single, highly efficient write to disk
+      fwrite(aml_buffer_data(bh), 1, aml_buffer_length(bh), out);
+      fclose(out);
+  }
+}
+
+/*
+static void write_ack(amr_worker_t *w) {
+  if (!is_schedule_running(w))
+    return;
+
+  char *filename = aml_pool_strdupf(w->schedule_thread->pool, "%s/%s_%zu",
+                                   w->task->scheduler->ack_dir,
+                                   w->task->task_name, w->partition);
   // printf("%s\n", filename);
   FILE *out = fopen(filename, "wb");
   fclose(out);
 }
+*/
+/*
+void get_ack_time(amr_worker_t *w) {
+  time_t *ack = &(w->task->state_linkage[w->partition].ack_time);
+  if (*ack == -1) {
+    char *filename = aml_pool_strdupf(w->schedule_thread->pool, "%s/%s_%zu",
+                                     w->task->scheduler->ack_dir,
+                                     w->task->task_name, w->partition);
+    *ack = io_modified(filename);
+  }
+  w->ack_time = *ack;
+}
+*/
 
 void get_ack_time(amr_worker_t *w) {
   time_t *ack = &(w->task->state_linkage[w->partition].ack_time);
@@ -353,6 +426,29 @@ void get_ack_time(amr_worker_t *w) {
                                      w->task->scheduler->ack_dir,
                                      w->task->task_name, w->partition);
     *ack = io_modified(filename);
+
+    if (*ack > 0) {
+        size_t len = 0;
+        char *json_buf = io_pool_read_file(w->schedule_thread->pool, &len, filename);
+
+        if (json_buf && len > 0) {
+            // Null-terminate safely for strstr
+            char *safe_buf = aml_pool_strdupf(w->schedule_thread->pool, "%.*s", (int)len, json_buf);
+
+            char *mask_ptr = strstr(safe_buf, "\"skipped_outputs_mask\"");
+            if (mask_ptr) {
+                // Move past the key and the colon to find the number
+                mask_ptr = strchr(mask_ptr, ':');
+                if (mask_ptr) {
+                    unsigned long long parsed_mask = 0;
+                    if (sscanf(mask_ptr + 1, "%llu", &parsed_mask) == 1) {
+                        w->task->state_linkage[w->partition].skipped_outputs_mask = (uint64_t)parsed_mask;
+                    }
+                }
+            }
+            // You can extract elapsed_ns the exact same way here if you want it!
+        }
+    }
   }
   w->ack_time = *ack;
 }
@@ -638,121 +734,182 @@ static bool is_task_complete(amr_task_t *task) {
   return true;
 }
 
-static bool is_worker_complete(amr_task_t *task, size_t partition) {
-  if (partition >= task->num_partitions)
-    return is_worker_complete(task, 0);
-
-  if (!task->state_linkage[partition].waiting_on_others &&
-      task->state_linkage[partition].completed)
-    return true;
-  return false;
-}
-
-static bool is_dependencies_complete(amr_task_t *task, size_t partition) {
-  // dependencies
-  amr_task_link_t *n = task->dependencies;
-  while (n) {
-    if (!is_task_complete(n->task))
-      return false;
-    n = n->next;
+/* 0 = WAITING, 1 = READY, 2 = SKIPPED */
+static int evaluate_dependencies(amr_task_t *task, size_t partition) {
+  for (amr_task_link_t *n = task->dependencies; n; n = n->next) {
+      for (size_t i = 0; i < n->task->num_partitions; i++) {
+          amr_task_state_link_t *st = &n->task->state_linkage[i];
+          if (!st->completed && !st->skipped) return 0;
+          if (st->skipped) return 2;
+      }
   }
 
-  // partial_dependencies
-  n = task->partial_dependencies;
-  while (n) {
-    if (!is_worker_complete(n->task, partition))
-      return false;
-    n = n->next;
+  for (amr_worker_input_t *ti = task->inputs; ti; ti = ti->next) {
+    if (ti->num_srcs == 0) continue; // Not a DAG edge
+
+    bool all_skipped = true;
+    bool any_waiting = false;
+
+    for (size_t i = 0; i < ti->num_srcs; i++) {
+      amr_worker_output_t *src = ti->srcs[i];
+      size_t src_part = (ti->edge_flags & AMR_EDGE_PARTITION) ? partition : 0;
+      if (src_part >= src->task->num_partitions) src_part = 0; // Fallback mapping
+
+      amr_task_state_link_t *prod_st = &src->task->state_linkage[src_part];
+
+      if (!prod_st->completed && !prod_st->skipped) {
+        any_waiting = true;
+      } else if (prod_st->completed && !(prod_st->skipped_outputs_mask & (1ULL << src->id))) {
+        all_skipped = false; // We found at least one valid stream
+      }
+    }
+
+    if (any_waiting) return 0; // Must wait for all branches of this union to resolve
+    if (all_skipped) return 2; // Starvation: If all upstream sources are skipped, we skip.
   }
-  return true;
+  return 1; // READY
 }
 
-/* Internal helper: push a just-created input into task->current_input
-   so that amr_task_input_* option setters (format/compare/reducer/limit/…)
-   continue to affect the most recently declared inputs. */
-static inline void _amr_push_current_input(amr_task_t *task,
-                                           amr_worker_input_t *ti) {
-  amr_task_input_link_t *link =
-      (amr_task_input_link_t *)aml_pool_alloc(task->scheduler->pool,
-                                              sizeof(*link));
-  link->input = ti;
-  link->next  = task->current_input;
-  task->current_input = link;
+static void check_task(amr_worker_t *w, amr_t *scheduler,
+                       amr_task_state_link_t *state_link, size_t partition,
+                       time_t when);
+
+static void mark_task_skipped(amr_t *scheduler, amr_task_state_link_t *state_link, size_t partition, time_t when) {
+  amr_task_t *task = state_link->task;
+  state_link->waiting_on_others = false;
+  state_link->skipped = true;
+  state_link->skipped_outputs_mask = ~(0ULL);
+  state_link->completed = when;
+
+  if (!scheduler->parsed_args.dump && !scheduler->parsed_args.list && !scheduler->parsed_args.help) {
+      char *filename = aml_pool_strdupf(scheduler->tmp_pool, "%s/%s_%zu",
+                                       scheduler->ack_dir, task->task_name, partition);
+      FILE *out = fopen(filename, "wb");
+      if (out) {
+          // Initialize a quick local buffer
+          aml_buffer_t *bh = aml_buffer_init(256);
+
+          aml_buffer_appendf(bh, "{\n");
+          aml_buffer_appendf(bh, "  \"task\": \"%s\",\n", task->task_name);
+          aml_buffer_appendf(bh, "  \"partition\": %zu,\n", partition);
+          aml_buffer_appendf(bh, "  \"skipped_outputs_mask\": %llu,\n", (unsigned long long)state_link->skipped_outputs_mask);
+          aml_buffer_appendf(bh, "  \"elapsed_ns\": 0\n");
+          aml_buffer_appendf(bh, "}\n");
+
+          fwrite(aml_buffer_data(bh), 1, aml_buffer_length(bh), out);
+          fclose(out);
+
+          aml_buffer_destroy(bh);
+      }
+  }
+
+  for (amr_task_link_t *link = task->reverse_dependencies; link; link = link->next)
+    for (size_t i = 0; i < link->task->num_partitions; i++)
+      check_task(NULL, scheduler, link->task->state_linkage + i, i, when);
+
+  for (amr_task_link_t *link = task->reverse_partial_dependencies; link; link = link->next) {
+    size_t i = partition;
+    if (i < link->task->num_partitions)
+      check_task(NULL, scheduler, link->task->state_linkage + i, i, when);
+  }
 }
 
-static void check_task(amr_worker_t *w,
-                       amr_t *scheduler,
+/*
+static void mark_task_skipped(amr_t *scheduler, amr_task_state_link_t *state_link, size_t partition, time_t when) {
+  amr_task_t *task = state_link->task;
+  state_link->waiting_on_others = false;
+  state_link->skipped = true;
+  state_link->skipped_outputs_mask = ~(0ULL); // All outputs from this partition are considered skipped
+  state_link->completed = when;
+
+  for (amr_task_link_t *link = task->reverse_dependencies; link; link = link->next)
+    for (size_t i = 0; i < link->task->num_partitions; i++)
+      check_task(NULL, scheduler, link->task->state_linkage + i, i, when);
+
+  for (amr_task_link_t *link = task->reverse_partial_dependencies; link; link = link->next) {
+    size_t i = partition;
+    if (i < link->task->num_partitions)
+      check_task(NULL, scheduler, link->task->state_linkage + i, i, when);
+  }
+}
+*/
+
+static void check_task(amr_worker_t *w, amr_t *scheduler,
                        amr_task_state_link_t *state_link, size_t partition,
                        time_t when) {
-  if (state_link->waiting_on_others &&
-      is_dependencies_complete(state_link->task, partition)) {
-    unlink_state(scheduler, state_link, partition);
-    state_link->waiting_on_others = false;
-    if (state_link->task->do_nothing)
-      mark_task_complete(w, state_link, partition, when);
-    else
-      link_state(scheduler, state_link, partition);
+  if (state_link->waiting_on_others) {
+    int status = evaluate_dependencies(state_link->task, partition);
+    if (status == 1) { // READY
+      unlink_state(scheduler, state_link, partition);
+      state_link->waiting_on_others = false;
+      if (state_link->task->do_nothing)
+        mark_task_complete(w, state_link, partition, when);
+      else
+        link_state(scheduler, state_link, partition);
+    } else if (status == 2) { // SKIPPED
+      unlink_state(scheduler, state_link, partition);
+      mark_task_skipped(scheduler, state_link, partition, when);
+    }
   }
 }
 
-static void mark_task_complete(amr_worker_t *w,
-                               amr_task_state_link_t *state_link,
+static void mark_task_complete(amr_worker_t *w, amr_task_state_link_t *state_link,
                                size_t partition, time_t when) {
   amr_task_t *task = state_link->task;
   amr_t *scheduler = task->scheduler;
   state_link->waiting_on_others = false;
   state_link->completed = when;
+  if (w) state_link->skipped_outputs_mask = w->skipped_outputs_mask;
   link_state(scheduler, state_link, partition);
 
   bool global_keep = scheduler->parsed_args.keep_files;
 
-  /* FILE DELETION LOGIC (Unlink when refcount hits 0) */
-  for (amr_worker_input_t *inp = w->inputs; inp; inp = inp->next) {
-    amr_worker_output_t *src = inp->src;
-    if (!src) continue; /* Ignore external files or previous run boundaries */
+  /* --- NEW: Garbage collection updated to loop over all valid sources --- */
+  if (w) {
+    for (amr_worker_input_t *inp = w->inputs; inp; inp = inp->next) {
+      for (size_t s = 0; s < inp->num_srcs; s++) {
+        amr_worker_output_t *src = inp->srcs[s];
+        if (!src) continue;
 
-    bool keep = global_keep || src->keep_output;
-    size_t mode = inp->edge_flags;
+        amr_task_state_link_t *prod_st = &src->task->state_linkage[partition < src->task->num_partitions ? partition : 0];
+        if (prod_st->skipped || (prod_st->skipped_outputs_mask & (1ULL << src->id))) continue;
 
-    if (mode & AMR_EDGE_PARTITION) {
-      size_t i = partition;
-      if (src->refcount_parts[i] > 0 && --src->refcount_parts[i] == 0) {
-        src->cleaned_up_parts[i] = true;
-        if (!keep && inp->num_files > 0) unlink(inp->files[0].filename);
-      }
-    } else if (mode & AMR_EDGE_FIRST) {
-      if (src->refcount_parts[0] > 0 && --src->refcount_parts[0] == 0) {
-        src->cleaned_up_parts[0] = true;
-        if (!keep && inp->num_files > 0) unlink(inp->files[0].filename);
-      }
-    } else if (mode & AMR_EDGE_SHUFFLE) {
-      size_t bucket = partition;
-      if (src->refcount_buckets && src->refcount_buckets[bucket] > 0) {
-        if (--src->refcount_buckets[bucket] == 0) {
-          if (!keep) {
-            for (size_t f = 0; f < inp->num_files; f++) {
-              unlink(inp->files[f].filename);
+        bool keep = global_keep || src->keep_output;
+        size_t mode = inp->edge_flags;
+
+        if (mode & AMR_EDGE_PARTITION) {
+          size_t i = partition;
+          if (src->refcount_parts[i] > 0 && --src->refcount_parts[i] == 0) {
+            src->cleaned_up_parts[i] = true;
+            if (!keep) unlink(amr_worker_input_name_for_src(w, inp, src, i));
+          }
+        } else if (mode & AMR_EDGE_FIRST) {
+          if (src->refcount_parts[0] > 0 && --src->refcount_parts[0] == 0) {
+            src->cleaned_up_parts[0] = true;
+            if (!keep) unlink(amr_worker_input_name_for_src(w, inp, src, 0));
+          }
+        } else if (mode & AMR_EDGE_SHUFFLE) {
+          size_t bucket = partition;
+          if (src->refcount_buckets && src->refcount_buckets[bucket] > 0) {
+            if (--src->refcount_buckets[bucket] == 0) {
+              if (!keep) unlink(amr_worker_input_name_for_src(w, inp, src, bucket));
+            }
+          }
+        } else if (mode & AMR_EDGE_ALL_TO_ALL) {
+          for (size_t i = 0; i < src->num_partitions; i++) {
+            if (src->refcount_parts[i] > 0 && --src->refcount_parts[i] == 0) {
+              src->cleaned_up_parts[i] = true;
+              if (!keep) unlink(amr_worker_input_name_for_src(w, inp, src, i));
             }
           }
         }
       }
-    } else if (mode & AMR_EDGE_ALL_TO_ALL) {
-      for (size_t i = 0; i < src->num_partitions; i++) {
-        if (src->refcount_parts[i] > 0 && --src->refcount_parts[i] == 0) {
-          src->cleaned_up_parts[i] = true;
-          if (!keep && i < inp->num_files) unlink(inp->files[i].filename);
-        }
-      }
-    } else {
-      /* Defensive guard: Catches bit corruption or missing edge flags */
-      abort();
     }
   }
 
-  /* DAG RESOLUTION LOGIC */
   bool partially_complete = false;
   for (size_t i = 0; i < task->num_partitions; i++) {
-    if (!task->state_linkage[i].completed) { partially_complete = true; break; }
+    if (!task->state_linkage[i].completed && !task->state_linkage[i].skipped) { partially_complete = true; break; }
   }
 
   if (!partially_complete) {
@@ -772,12 +929,13 @@ static void mark_task_complete(amr_worker_t *w,
   }
 }
 
+
 char *amr_run_file_path(amr_t *h, size_t run, const char *task_name,
                         size_t partition, const char *file_base) {
   aml_buffer_t *bh = aml_buffer_init(256);
 
   /* Assume default root "tasks/" for runs */
-  aml_buffer_setf(bh, "tasks/run_%zu/%s_%zu/", run, task_name, partition);
+  aml_buffer_setf(bh, "%s/run_%zu/%s_%zu/", h->workspace_dir, run, task_name, partition);
 
   if (io_extension(file_base, "lz4")) {
     aml_buffer_append(bh, file_base, strlen(file_base) - 4);
@@ -907,24 +1065,42 @@ void amr_task_input_from_pipeline_port_all_to_all(amr_task_t *t, const char *por
 }
 
 // 2. SIBLING LINKS (Tasks connecting to other tasks inside the same pipeline)
+/* Helper to properly apply the pipeline namespace to one OR MULTIPLE sibling tasks */
+static char *expand_sibling_names(amr_task_t *t, const char *siblings) {
+    if (!strchr(siblings, '|')) {
+        /* Fast path: Single task */
+        return aml_pool_strdupf(t->scheduler->pool, "%s_%s", t->pipeline->ns, siblings);
+    }
+
+    /* Complex path: Union of tasks (e.g. "taskA|taskB") */
+    aml_pool_t *pool = t->scheduler->pool;
+    size_t num_sibs = 0;
+    char **sibs = aml_pool_split2(pool, &num_sibs, '|', siblings);
+
+    aml_buffer_t *bh = aml_buffer_init(256);
+    for (size_t i = 0; i < num_sibs; i++) {
+        aml_buffer_appendf(bh, "%s_%s", t->pipeline->ns, sibs[i]);
+        if (i + 1 < num_sibs) aml_buffer_appendc(bh, '|');
+    }
+    char *res = aml_pool_strdup(pool, aml_buffer_data(bh));
+    aml_buffer_destroy(bh);
+    return res;
+}
+
 void amr_task_input_from_sibling_first(amr_task_t *t, const char *sibling, const char *out, double pct) {
-    char *full_name = aml_pool_strdupf(t->scheduler->pool, "%s_%s", t->pipeline->ns, sibling);
-    amr_task_input_from_task_first(t, full_name, out, pct);
+    amr_task_input_from_task_first(t, expand_sibling_names(t, sibling), out, pct);
 }
 
 void amr_task_input_from_sibling_partition(amr_task_t *t, const char *sibling, const char *out, double pct) {
-    char *full_name = aml_pool_strdupf(t->scheduler->pool, "%s_%s", t->pipeline->ns, sibling);
-    amr_task_input_from_task_partition(t, full_name, out, pct);
+    amr_task_input_from_task_partition(t, expand_sibling_names(t, sibling), out, pct);
 }
 
 void amr_task_input_from_sibling_shuffle(amr_task_t *t, const char *sibling, const char *out, double pct) {
-    char *full_name = aml_pool_strdupf(t->scheduler->pool, "%s_%s", t->pipeline->ns, sibling);
-    amr_task_input_from_task_shuffle(t, full_name, out, pct);
+    amr_task_input_from_task_shuffle(t, expand_sibling_names(t, sibling), out, pct);
 }
 
 void amr_task_input_from_sibling_all_to_all(amr_task_t *t, const char *sibling, const char *out, double pct) {
-    char *full_name = aml_pool_strdupf(t->scheduler->pool, "%s_%s", t->pipeline->ns, sibling);
-    amr_task_input_from_task_all_to_all(t, full_name, out, pct);
+    amr_task_input_from_task_all_to_all(t, expand_sibling_names(t, sibling), out, pct);
 }
 
 // 3. EXTERNAL ALIASING (Consumer tasks reading from the Pipeline's logical exit)

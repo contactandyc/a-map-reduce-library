@@ -174,7 +174,7 @@ Every AMR executable automatically inherits a diagnostic CLI without requiring c
 
 ## 📚 API Documentation
 
-The primary include for the framework, [`amr.h`](include/a-map-reduce-library/amr.h), acts as the umbrella header. The API is divided into domain-specific sub-headers (`amr_core.h`, `amr_task.h`, `amr_worker.h`, etc.) which are extensively documented.
+The primary include for the framework, [`amr.h`](https://www.google.com/search?q=include/a-map-reduce-library/amr.h), acts as the umbrella header. The API is divided into domain-specific sub-headers (`amr_core.h`, `amr_task.h`, `amr_worker.h`, etc.) which are extensively documented.
 
 Inside the headers, you will find:
 
@@ -188,9 +188,26 @@ Inside the headers, you will find:
 
 The repository includes a progressive set of examples in the `examples/` directory that demonstrate AMR features scaling from simple metrics to billion-scale recommender systems.
 
-1. **`01_word_count`**: Demonstrates file ingestion, cross-partition shuffles, local reduction (squashing duplicates), global gathering, and text formatting.
-2. **`02_streaming_recommender`**: A partitioned merge-join pipeline showing custom datatypes (`HalfEnriched`, `FullEnriched`), multi-input streams (`amr_task_io_transform`), and grouped record processing (`amr_task_group_transform`).
-3. **`03_pipeline_recommender`**: Introduces **Sub-Graphs**. Shows how to encapsulate complex join logic into reusable, composable `amr_pipeline_t` modules.
-4. **`04_inverted_recommender`**: Billion-scale graph processing. Demonstrates string-to-integer encoding, generating bipartite graphs, zero-shuffle optimization, and passing dynamic configurations into pipelines.
-5. **`05_complements_recommender`**: First-order cosine similarity math. Highlights the use of `amr_task_input_load_into_memory()` to broadcast a dense dictionary into a partitioned in-memory cache.
-6. **`06_substitutes_recommender`**: Second-order TF-IDF weighting and L2 normalization. Demonstrates advanced mathematical reductions, custom state passing to workers (`amr_task_transform_data`), and highly complex graph traversals.
+### Getting the Data
+
+Most of the examples build upon real-world Amazon clickstream datasets. Before running examples `02` through `07`, run the download script in the `data/` directory to fetch the logs:
+
+```bash
+cd data
+./download_data.sh
+# Follow the prompts to select a dataset (e.g. 2 for amazon_2023, then 1 for Gift_Cards).
+cd ..
+
+```
+
+### Example Directory
+
+1. **`01_word_count`**: The MapReduce classic. Introduces DAG wiring, cross-partition shuffles, local reduction (squashing duplicates), global gathering, and text formatting.
+2. **`02_streaming_recommender`**: A partitioned merge-join pipeline. Demonstrates custom datatypes, multi-input streams (`amr_task_io_transform`), and $O(1)$ memory joins for massive dictionaries.
+3. **`03_pipeline_recommender`**: Introduces **Sub-Graphs**. Refactors Example 02 to show how to encapsulate complex logic into reusable, composable `amr_pipeline_t` modules with abstract ports.
+4. **`04_inverted_recommender`**: Billion-scale graph processing. Overhauls the math engine to demonstrate string-to-integer encoding, bipartite graphs, and the zero-shuffle network optimization.
+5. **`05_complements_recommender`**: First-order cosine similarity math. Highlights `amr_task_input_load_into_memory()` to broadcast dense dictionaries into a partitioned in-memory cache for ultra-fast lookups.
+6. **`06_substitutes_recommender`**: Second-order co-occurrence. Demonstrates TF-IDF, L2 normalization, and advanced mathematical feature-vector intersections.
+7. **`07_buddies`**: Reciprocal Nearest Neighbors (RNN). Enforces deterministic ordering, top-1 extraction, and complex grouped validation to find mutually exclusive pairings.
+8. **`08_conditional_branching`**: Dynamic DAG routing. Introduces the **Cascading Skip** and **Union Edges** (`|`) to gracefully handle IF/ELSE control flow and safely prune starved downstream tasks at runtime.
+9. **`09_chaining`**: Chained transformations. Demonstrates explicit internal routing (the "Pipe Stash"), building Map-Side Combiners, and processing contiguous arrays natively using a `group_runner`.

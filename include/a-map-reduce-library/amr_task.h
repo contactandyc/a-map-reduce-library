@@ -73,47 +73,32 @@ extern "C" {
  * ======================================================================== */
 
 /* ========================================================================
- * TRANSFORM CHAINING & OUTPUT ROUTING
+ * TRANSFORM CHAINING & EXPLICIT ROUTING (INTERNAL DAGs)
  * ========================================================================
  * A Task can execute a single transform or a chain of multiple transforms.
- * How you configure this dictates how the framework handles your outputs
- * (outs[0], outs[1], ... outs[N]).
+ * AMR uses Explicit Name-Based Routing to move data between them.
  *
- * The outs[] ordering is defined by the order of names in the transform's
- * outp string (e.g., "tmp_pipe|error_log" => outs[0]=tmp_pipe, outs[1]=error_log).
+ * The arrays passed to your runner (e.g. `ins[]` and `outs[]`) map
+ * DIRECTLY to the local order of names provided in the transform string
+ * ("inA|inB" -> ins[0]=inA, ins[1]=inB).
  *
- * SCENARIO A: SINGLE TRANSFORM (The Default)
- * If your task only declares one transform, all outputs are treated equally.
- * outs[0], outs[1], etc., are all finalized, written to disk, and closed
- * when the transform completes.
+ * EXPOSED VS INTERNAL OUTPUTS:
+ * By default, any output declared via `amr_task_output()` is EXPOSED.
+ * It is permanently written to disk and available for downstream DAG tasks.
  *
- * SCENARIO B: CHAINED TRANSFORMS (Pipelining)
- * If you declare multiple transforms sequentially in the same task, the
- * framework automatically routes data between them.
- * Terminology:
- * - 'intermediate output' refers to a task output artifact that is eligible
- * for GC after all consumers finish
- * - 'temporary files/chunks' refers to internal scratch used for
- * sort/merge/compression.
- *
- * 1. The Pipe (outs[0]): ONLY the first output (outs[0]) of the current
- * transform is piped forward as the input (ins[0]) to the next transform.
- * By default, the piped artifact is treated as an intermediate and is
- * garbage-collected after the downstream transform consumes it. Use
- * amr_keep_intermediate_files(sched) to retain intermediates globally (debug),
- * or amr_task_output_keep(task) to retain a specific materialized output.
- *
- * 2. The Branches (outs[1..N]): All subsequent outputs are NOT piped.
- * They are treated as terminal outputs for that transform: they are fully
- * finalized (including merge/rename/ack as configured) when the transform
- * completes. This is ideal for branching off error logs or side-effects.
+ * If you mark an output as INTERNAL via `amr_task_output_internal()`, it
+ * becomes a temporary pipe:
+ * 1. You can explicitly route it to a downstream transform in the same task
+ * by using its name: `amr_task_transform(t, "my_internal_tmp.bin", ...)`
+ * 2. The framework will intelligently hand off the read handles in memory.
+ * 3. When the task finishes, the framework automatically garbage-collects
+ * (unlinks) the internal file, preventing disk leaks.
  *
  * THE SORT-MERGE OPTIMIZATION:
- * If you apply `amr_task_output_sort_by` to outs[0] during a chained
- * transform, the framework performs an important optimization. Instead of
- * writing a fully merged, sorted file to disk only to immediately read it
- * again, AMR merges the temporary sorted chunks *directly* into the RAM
- * of the downstream transform.
+ * If you apply `amr_task_output_sort_by` to an output, and immediately pipe
+ * it to a downstream transform, AMR performs a Map-Side Combine. It merges
+ * the temporary sorted chunks directly into the RAM of the downstream
+ * transform without ever writing a final merged file to disk.
  * ======================================================================== */
 
 /* Context: [Init | Main Thread]
@@ -153,6 +138,10 @@ bool amr_task_partial_dependency(amr_task_t *task, const char *dependency);
 /* Declares a standard sequential output port (1 file per worker partition).
  * This makes it the "current" output for subsequent modifier calls. */
 void amr_task_output(amr_task_t *task, const char *name, double out_ram_pct);
+
+/* Marks an output as an internal pipe. It will be automatically deleted from
+ * disk as soon as the worker finishes executing its transform chain. */
+void amr_task_output_internal(amr_task_t *task);
 
 /* Prevents the framework's GC from deleting this specific output artifact
  * once materialized on disk, keeping it permanently. */
@@ -407,7 +396,8 @@ void amr_task_input_load_into_memory(amr_task_t *task);
 void amr_task_runner(amr_task_t *task, amr_worker_cb runner);
 void amr_task_default_runner(amr_task_t *task);
 
-/* Setup transforms: Connect named inputs to named outputs with a specific runner */
+/* Setup transforms: Connect named inputs to named outputs with a specific runner.
+ * Order of string names determines local indices (0, 1...) passed to runner callbacks. */
 void amr_task_transform(amr_task_t *task, const char *inp, const char *outp,
                         amr_runner_cb runner);
 
