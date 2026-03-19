@@ -25,15 +25,15 @@ RUN apt-get update && apt-get install -y \
 
 # Development tooling (optional)
 RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-venv \
+    python3-pip \
     valgrind \
     gdb \
     perl \
     autoconf \
     automake \
     libtool \
-    python3 \
-    python3-venv \
-    python3-pip \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Install CMake from official binaries (arch-aware) ------------------------
@@ -87,6 +87,24 @@ RUN set -eux; \
   ./build.sh install && \
   cd .. && \
   rm -rf the-macro-library
+
+# --- Build & install a-json-sax-library ---
+RUN set -eux; \
+  git clone --depth 1 "https://github.com/contactandyc/a-json-sax-library.git" "a-json-sax-library" && \
+  cd a-json-sax-library && \
+  ./build.sh clean && \
+  ./build.sh install && \
+  cd .. && \
+  rm -rf a-json-sax-library
+
+# --- Build & install a-json-library ---
+RUN set -eux; \
+  git clone --depth 1 "https://github.com/contactandyc/a-json-library.git" "a-json-library" && \
+  cd a-json-library && \
+  ./build.sh clean && \
+  ./build.sh install && \
+  cd .. && \
+  rm -rf a-json-library
 
 # --- Build & install the-io-library ---
 RUN set -eux; \
