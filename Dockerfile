@@ -63,57 +63,63 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # --- Build & install a-memory-library ---
 RUN set -eux; \
-  git clone --depth 1 "https://github.com/contactandyc/a-memory-library.git" "a-memory-library" && \
-  cd a-memory-library && \
-  ./build.sh clean && \
-  ./build.sh install && \
-  cd .. && \
-  rm -rf a-memory-library
+    git clone --depth 1 --single-branch "https://github.com/contactandyc/a-memory-library.git" "a-memory-library"; \
+    cd "a-memory-library"; \
+    ./build.sh clean && \
+    ./build.sh install
+; \
+    cd ..; \
+    rm -rf "a-memory-library"
 
 # --- Build & install the-lz4-library ---
 RUN set -eux; \
-  git clone --depth 1 "https://github.com/contactandyc/the-lz4-library.git" "the-lz4-library" && \
-  cd the-lz4-library && \
-  ./build.sh clean && \
-  ./build.sh install && \
-  cd .. && \
-  rm -rf the-lz4-library
+    git clone --depth 1 --single-branch "https://github.com/contactandyc/the-lz4-library.git" "the-lz4-library"; \
+    cd "the-lz4-library"; \
+    ./build.sh clean && \
+    ./build.sh install
+; \
+    cd ..; \
+    rm -rf "the-lz4-library"
 
 # --- Build & install the-macro-library ---
 RUN set -eux; \
-  git clone --depth 1 "https://github.com/contactandyc/the-macro-library.git" "the-macro-library" && \
-  cd the-macro-library && \
-  ./build.sh clean && \
-  ./build.sh install && \
-  cd .. && \
-  rm -rf the-macro-library
+    git clone --depth 1 --single-branch "https://github.com/contactandyc/the-macro-library.git" "the-macro-library"; \
+    cd "the-macro-library"; \
+    ./build.sh clean && \
+    ./build.sh install
+; \
+    cd ..; \
+    rm -rf "the-macro-library"
 
 # --- Build & install a-json-sax-library ---
 RUN set -eux; \
-  git clone --depth 1 "https://github.com/contactandyc/a-json-sax-library.git" "a-json-sax-library" && \
-  cd a-json-sax-library && \
-  ./build.sh clean && \
-  ./build.sh install && \
-  cd .. && \
-  rm -rf a-json-sax-library
+    git clone --depth 1 --single-branch "https://github.com/contactandyc/a-json-sax-library.git" "a-json-sax-library"; \
+    cd "a-json-sax-library"; \
+    ./build.sh clean && \
+    ./build.sh install
+; \
+    cd ..; \
+    rm -rf "a-json-sax-library"
 
 # --- Build & install a-json-library ---
 RUN set -eux; \
-  git clone --depth 1 "https://github.com/contactandyc/a-json-library.git" "a-json-library" && \
-  cd a-json-library && \
-  ./build.sh clean && \
-  ./build.sh install && \
-  cd .. && \
-  rm -rf a-json-library
+    git clone --depth 1 --single-branch "https://github.com/contactandyc/a-json-library.git" "a-json-library"; \
+    cd "a-json-library"; \
+    ./build.sh clean && \
+    ./build.sh install
+; \
+    cd ..; \
+    rm -rf "a-json-library"
 
 # --- Build & install the-io-library ---
 RUN set -eux; \
-  git clone --depth 1 "https://github.com/contactandyc/the-io-library.git" "the-io-library" && \
-  cd the-io-library && \
-  ./build.sh clean && \
-  ./build.sh install && \
-  cd .. && \
-  rm -rf the-io-library
+    git clone --depth 1 --single-branch "https://github.com/contactandyc/the-io-library.git" "the-io-library"; \
+    cd "the-io-library"; \
+    ./build.sh clean && \
+    ./build.sh install
+; \
+    cd ..; \
+    rm -rf "the-io-library"
 
 
 # --- Build & install this project --------------------------------------------
