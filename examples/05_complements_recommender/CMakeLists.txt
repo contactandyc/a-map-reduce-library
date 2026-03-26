@@ -1,21 +1,21 @@
-# SPDX-FileCopyrightText: 2025-2026 Andy Curtis <contactandyc@gmail.com>
+# SPDX-FileCopyrightText: 2025–2026 Andy Curtis <contactandyc@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
+#
+# Maintainer: Andy Curtis <contactandyc@gmail.com>
 
 cmake_minimum_required(VERSION 3.20)
 
 # A small "apps" project that builds example/demo binaries.
-project(a-map-reduce-library_05_complements_recommender LANGUAGES C)
+project(a_map_reduce_library_05_complements_recommender LANGUAGES C)
 
 # Optional math lib on POSIX
 find_library(M_LIB m)
 
 # Bring in suite-level dependencies derived by the renderer
-find_package(the_io_library CONFIG REQUIRED)
-find_package(a_memory_library CONFIG REQUIRED)
-find_package(the_macro_library CONFIG REQUIRED)
 find_package(a_map_reduce_library CONFIG REQUIRED)
 find_package(a_json_library CONFIG REQUIRED)
 find_package(a_json_sax_library CONFIG REQUIRED)
+find_package(a_memory_library CONFIG REQUIRED)
 
 # ---- Binaries ----
 add_executable(complements_recommender  src/pipeline_complements.c  src/pipeline_amazon.c  src/main.c  src/pipeline_inv_freq.c)
@@ -35,7 +35,7 @@ if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
 endif()
 
 # Link the union of deps computed for this app context
-target_link_libraries(complements_recommender PRIVATE  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library  a_map_reduce_library::a_map_reduce_library  a_json_library::a_json_library  a_json_sax_library::a_json_sax_library)
+target_link_libraries(complements_recommender PRIVATE  a_map_reduce_library::a_map_reduce_library  a_json_library::a_json_library  a_json_sax_library::a_json_sax_library  a_memory_library::a_memory_library)
 
 # Optional libm
 if(M_LIB)

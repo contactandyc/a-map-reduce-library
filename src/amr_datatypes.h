@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: 2025-2026 Andy Curtis <contactandyc@gmail.com>
+// SPDX-FileCopyrightText: 2025–2026 Andy Curtis <contactandyc@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
+//
+// Maintainer: Andy Curtis <contactandyc@gmail.com>
 
 #ifndef INTERNAL_AMR_DATATYPES_H
 #define INTERNAL_AMR_DATATYPES_H
