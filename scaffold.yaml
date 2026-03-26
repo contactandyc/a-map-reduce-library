@@ -1,13 +1,17 @@
 project_title: A Map Reduce Library
 version: 0.0.3
+stack: c/cmake
+date_created: 2025-08-01
 
-profile: andy-curtis/andy-curtis
-template: cmake-c-git
+base_templates:
+  repo: https://github.com/contactandyc/scaffold-templates.git
+  ref: main
 
 depends_on:
   - https://github.com/contactandyc/the-io-library.git
   - https://github.com/contactandyc/a-memory-library.git
   - https://github.com/contactandyc/the-macro-library.git
+
 apps:
   context:
     dest: examples
