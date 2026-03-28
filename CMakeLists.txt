@@ -10,14 +10,11 @@ project(a_map_reduce_library
   VERSION 0.0.3
   LANGUAGES C
 )
-# ── Variant selection for the umbrella alias (NOT for building) ───────────────
-# We build ALL variant targets below; this just selects which one the umbrella
-# alias (a_map_reduce_library::a_map_reduce_library) points to during this configure.
+# ── Variant selection for the umbrella alias ──────────────────────────────────
 set(A_BUILD_VARIANT "debug" CACHE STRING
     "Umbrella choice for in-tree linking (debug|memory|static|shared)")
 set_property(CACHE A_BUILD_VARIANT PROPERTY STRINGS debug memory static shared)
 
-# ── Developer-only coverage toggle (applies to this entire CMake tree) ────────
 option(A_ENABLE_COVERAGE "Enable code coverage instrumentation for this build" OFF)
 if(A_ENABLE_COVERAGE)
   if(CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -29,12 +26,10 @@ if(A_ENABLE_COVERAGE)
   endif()
 endif()
 
-# Memory-profile convenience for the *_memory variant
 option(A_BUILD_ENABLE_MEMORY_PROFILE "Define a macro on the 'memory' variant" OFF)
 set(A_BUILD_MEMORY_DEFINE "_AML_DEBUG_" CACHE STRING
     "Macro to define on the 'memory' variant when memory profiling is enabled")
 
-# Emulate Debug/Release per-variant (so one configure can build both kinds)
 if(MSVC)
   set(_A_DEBUG_OPTS /Zi /Od)
   set(_A_RELEASE_OPTS /O2 /DNDEBUG)
@@ -52,11 +47,18 @@ find_package(the_macro_library CONFIG REQUIRED)
 
 # ---- Dependencies (PkgConfig Shims) ----
 
-
-# ── Library variants (ALL are defined & built/installed) ──────────────────────
+# ── Main Targets (Compiled Libraries) ─────────────────────────────────────────
 
 add_library(a_map_reduce_library_debug STATIC
-  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
+  src/amr.c
+  src/amr_cli.c
+  src/amr_common_datatypes.c
+  src/amr_datatypes.c
+  src/amr_debug.c
+  src/amr_runner.c
+  src/amr_task.c
+  src/amr_worker.c
+)
 
 target_include_directories(a_map_reduce_library_debug PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -76,23 +78,30 @@ if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
   )
 endif()
 
-# Link deps once
-target_link_libraries(a_map_reduce_library_debug PUBLIC  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library)
+target_link_libraries(a_map_reduce_library_debug PUBLIC
+  the_io_library::the_io_library
+  a_memory_library::a_memory_library
+  the_macro_library::the_macro_library
+)
 
-# Per-variant optimization flavor
 target_compile_options(a_map_reduce_library_debug PRIVATE ${_A_DEBUG_OPTS})
 
-# Memory profiling macro on the memory variant (opt-in)
 
-# Install this variant
 install(TARGETS a_map_reduce_library_debug EXPORT a_map_reduce_libraryTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
 add_library(a_map_reduce_library_memory STATIC
-  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
+  src/amr.c
+  src/amr_cli.c
+  src/amr_common_datatypes.c
+  src/amr_datatypes.c
+  src/amr_debug.c
+  src/amr_runner.c
+  src/amr_task.c
+  src/amr_worker.c
+)
 
 target_include_directories(a_map_reduce_library_memory PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -112,26 +121,33 @@ if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
   )
 endif()
 
-# Link deps once
-target_link_libraries(a_map_reduce_library_memory PUBLIC  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library)
+target_link_libraries(a_map_reduce_library_memory PUBLIC
+  the_io_library::the_io_library
+  a_memory_library::a_memory_library
+  the_macro_library::the_macro_library
+)
 
-# Per-variant optimization flavor
 target_compile_options(a_map_reduce_library_memory PRIVATE ${_A_DEBUG_OPTS})
 
-# Memory profiling macro on the memory variant (opt-in)
 if(A_BUILD_ENABLE_MEMORY_PROFILE)
   target_compile_definitions(a_map_reduce_library_memory PUBLIC ${A_BUILD_MEMORY_DEFINE})
 endif()
 
-# Install this variant
 install(TARGETS a_map_reduce_library_memory EXPORT a_map_reduce_libraryTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
 add_library(a_map_reduce_library_static STATIC
-  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
+  src/amr.c
+  src/amr_cli.c
+  src/amr_common_datatypes.c
+  src/amr_datatypes.c
+  src/amr_debug.c
+  src/amr_runner.c
+  src/amr_task.c
+  src/amr_worker.c
+)
 
 target_include_directories(a_map_reduce_library_static PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -151,23 +167,30 @@ if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
   )
 endif()
 
-# Link deps once
-target_link_libraries(a_map_reduce_library_static PUBLIC  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library)
+target_link_libraries(a_map_reduce_library_static PUBLIC
+  the_io_library::the_io_library
+  a_memory_library::a_memory_library
+  the_macro_library::the_macro_library
+)
 
-# Per-variant optimization flavor
 target_compile_options(a_map_reduce_library_static PRIVATE ${_A_RELEASE_OPTS})
 
-# Memory profiling macro on the memory variant (opt-in)
 
-# Install this variant
 install(TARGETS a_map_reduce_library_static EXPORT a_map_reduce_libraryTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
 add_library(a_map_reduce_library_shared SHARED
-  src/amr.c  src/amr_cli.c  src/amr_common_datatypes.c  src/amr_datatypes.c  src/amr_debug.c  src/amr_runner.c  src/amr_task.c  src/amr_worker.c)
+  src/amr.c
+  src/amr_cli.c
+  src/amr_common_datatypes.c
+  src/amr_datatypes.c
+  src/amr_debug.c
+  src/amr_runner.c
+  src/amr_task.c
+  src/amr_worker.c
+)
 
 target_include_directories(a_map_reduce_library_shared PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -187,32 +210,31 @@ if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
   )
 endif()
 
-# Link deps once
-target_link_libraries(a_map_reduce_library_shared PUBLIC  the_io_library::the_io_library  a_memory_library::a_memory_library  the_macro_library::the_macro_library)
+target_link_libraries(a_map_reduce_library_shared PUBLIC
+  the_io_library::the_io_library
+  a_memory_library::a_memory_library
+  the_macro_library::the_macro_library
+)
 
-# Per-variant optimization flavor
 target_compile_options(a_map_reduce_library_shared PRIVATE ${_A_RELEASE_OPTS})
 
-# Memory profiling macro on the memory variant (opt-in)
 
-# Install this variant
 install(TARGETS a_map_reduce_library_shared EXPORT a_map_reduce_libraryTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# In-tree umbrella alias picking one variant (for unified builds)
 string(REPLACE "-" "_" _variant_us "${A_BUILD_VARIANT}")
 set(_sel_tgt "a_map_reduce_library_${_variant_us}")
 if(TARGET "${_sel_tgt}")
   add_library(a_map_reduce_library::a_map_reduce_library ALIAS ${_sel_tgt})
 endif()
 
+
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 
-# Export all variant targets together
 install(EXPORT a_map_reduce_libraryTargets
   FILE a_map_reduce_libraryTargets.cmake
   NAMESPACE a_map_reduce_library::
@@ -242,13 +264,15 @@ include("${CMAKE_CURRENT_LIST_DIR}/a_map_reduce_libraryTargets.cmake")
 
 set(_ns "@A_BUILD_EXPORT_NAMESPACE@")
 set(_pkg "@A_BUILD_TARGET_BASENAME@")
+
+# ONLY run target modifications if the imported target doesn't exist yet!
 if(NOT TARGET ${_ns}::${_pkg})
   add_library(${_ns}::${_pkg} INTERFACE IMPORTED)
-endif()
 
-set(_pick ${_ns}::${_pkg}_${_picked_us})
-if(TARGET "${_pick}")
-  target_link_libraries(${_ns}::${_pkg} INTERFACE "${_pick}")
+  set(_pick ${_ns}::${_pkg}_${_picked_us})
+  if(TARGET "${_pick}")
+    target_link_libraries(${_ns}::${_pkg} INTERFACE "${_pick}")
+  endif()
 endif()
 ]=])
 
@@ -274,3 +298,15 @@ install(FILES
 )
 # Extra project-specific targets
 
+
+
+# Dynamically mount all subprojects (apps, examples, tests, etc.)
+add_subdirectory(examples/01_word_count)
+add_subdirectory(examples/02_streaming_recommender)
+add_subdirectory(examples/03_pipeline_recommender)
+add_subdirectory(examples/04_inverted_recommender)
+add_subdirectory(examples/05_complements_recommender)
+add_subdirectory(examples/06_substitutes_recommender)
+add_subdirectory(examples/07_buddies)
+add_subdirectory(examples/08_conditional_branching)
+add_subdirectory(examples/09_chaining)
