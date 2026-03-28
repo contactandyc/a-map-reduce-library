@@ -1,5 +1,5 @@
 project_title: A Map Reduce Library
-version: 0.1.0
+version: 0.0.3
 stack: c/cmake
 date_created: 2025-08-01
 
@@ -12,24 +12,20 @@ depends_on:
   - https://github.com/contactandyc/a-memory-library.git
   - https://github.com/contactandyc/the-macro-library.git
 
-apps:
-  context:
-    dest: examples
-    depends_on:
-      - https://github.com/contactandyc/a-map-reduce-library.git
-      - https://github.com/contactandyc/a-json-library.git
-      - https://github.com/contactandyc/a-json-sax-library.git
-      - https://github.com/contactandyc/a-memory-library.git
+examples:
+  depends_on:
+    - https://github.com/contactandyc/a-json-library.git
+    - https://github.com/contactandyc/a-json-sax-library.git
   01_word_count:
-    binaries:
+    targets:
       word_count:
         - src/main.c
   02_streaming_recommender:
-    binaries:
+    targets:
       streaming_recommender:
         - src/*.c
   03_pipeline_recommender:
-    binaries:
+    targets:
       pipeline_recommender:
         - src/main.c
         - src/pipeline_amazon.c
@@ -41,28 +37,28 @@ apps:
         - src/pipeline_enrich.c
         - src/pipeline_co_freq.c
   04_inverted_recommender:
-    binaries:
+    targets:
       inverted_recommender:
         - src/*.c
   05_complements_recommender:
-    binaries:
+    targets:
       complements_recommender:
         - src/*.c
   06_substitutes_recommender:
-    binaries:
+    targets:
       substitutes_recommender:
         - src/*.c
   07_buddies:
-    binaries:
+    targets:
       buddies:
         - src/*.c
   08_conditional_branching:
-    binaries:
+    targets:
       conditional_branching:
         - src/main.c
       conditional_pipeline_branching:
         - src/main_pipeline.c
   09_chaining:
-    binaries:
+    targets:
       chaining:
         - src/*.c
