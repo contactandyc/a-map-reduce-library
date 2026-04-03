@@ -35,37 +35,9 @@ sudo apt-get update && sudo apt-get install -y zlib1g-dev
 ### Development tooling (optional)
 
 ```bash
-sudo apt-get update && sudo apt-get install -y valgrind gdb perl autoconf automake libtool
+sudo apt-get update && sudo apt-get install -y autoconf automake gdb libtool perl python3 python3-pip python3-venv valgrind
 ```
 
-
-
-### a-memory-library
-
-Clone & build:
-
-```bash
-git clone --depth 1 --single-branch "https://github.com/contactandyc/a-memory-library.git" "a-memory-library"
-cd "a-memory-library"
-./build.sh clean
-./build.sh install
-cd ..
-rm -rf "a-memory-library"
-```
-
-
-### the-lz4-library
-
-Clone & build:
-
-```bash
-git clone --depth 1 --single-branch "https://github.com/contactandyc/the-lz4-library.git" "the-lz4-library"
-cd "the-lz4-library"
-./build.sh clean
-./build.sh install
-cd ..
-rm -rf "the-lz4-library"
-```
 
 
 ### the-macro-library
@@ -79,6 +51,20 @@ cd "the-macro-library"
 ./build.sh install
 cd ..
 rm -rf "the-macro-library"
+```
+
+
+### a-memory-library
+
+Clone & build:
+
+```bash
+git clone --depth 1 --single-branch "https://github.com/contactandyc/a-memory-library.git" "a-memory-library"
+cd "a-memory-library"
+./build.sh clean
+./build.sh install
+cd ..
+rm -rf "a-memory-library"
 ```
 
 
@@ -107,6 +93,20 @@ cd "a-json-library"
 ./build.sh install
 cd ..
 rm -rf "a-json-library"
+```
+
+
+### the-lz4-library
+
+Clone & build:
+
+```bash
+git clone --depth 1 --single-branch "https://github.com/contactandyc/the-lz4-library.git" "the-lz4-library"
+cd "the-lz4-library"
+./build.sh clean
+./build.sh install
+cd ..
+rm -rf "the-lz4-library"
 ```
 
 
