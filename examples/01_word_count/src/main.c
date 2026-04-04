@@ -165,7 +165,7 @@ static void format_text_runner(amr_worker_t *w, io_record_t *r, io_out_t **outs)
 
     // Use setf to instantly clear the buffer and write the new text payload.
     // We do not add a '\n' here because the IO framework handles delimiters natively.
-    aml_buffer_setf(bh, "%s\t%.0f", sw->str, sw->weight);
+    aml_buffer_setf(bh, "%s\t%.0f", sw->str, sw->w);
 
     io_out_write_record(outs[0], aml_buffer_data(bh), aml_buffer_length(bh));
 }
