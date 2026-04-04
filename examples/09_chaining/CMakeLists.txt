@@ -28,13 +28,9 @@ target_include_directories(chaining PRIVATE
 set_target_properties(chaining PROPERTIES
   C_STANDARD 23
   C_STANDARD_REQUIRED YES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED YES
 )
-if("CXX" IN_LIST CMAKE_PROJECT_LANGUAGES)
-  set_target_properties(chaining PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED YES
-  )
-endif()
 
 # Ensure examples running in library stacks link the main library!
 if(NOT TARGET a_map_reduce_library::a_map_reduce_library)
