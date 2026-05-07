@@ -7,9 +7,14 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(a_map_reduce_library
-  VERSION 0.1.4
+  VERSION 0.1.5
   LANGUAGES C
 )
+
+if(CMAKE_PREFIX_PATH)
+  include_directories("${CMAKE_PREFIX_PATH}/include")
+  link_directories("${CMAKE_PREFIX_PATH}/lib")
+endif()
 # ── Variant selection for the umbrella alias ──────────────────────────────────
 set(A_BUILD_VARIANT "debug" CACHE STRING
     "Umbrella choice for in-tree linking (debug|memory|static|shared)")
@@ -282,12 +287,13 @@ install(FILES
 
 
 # Dynamically mount all subprojects (apps, examples, tests, etc.)
-add_subdirectory(examples/01_word_count)
-add_subdirectory(examples/02_streaming_recommender)
-add_subdirectory(examples/03_pipeline_recommender)
-add_subdirectory(examples/04_inverted_recommender)
-add_subdirectory(examples/05_complements_recommender)
-add_subdirectory(examples/06_substitutes_recommender)
-add_subdirectory(examples/07_buddies)
-add_subdirectory(examples/08_conditional_branching)
-add_subdirectory(examples/09_chaining)
+# # add_subdirectory(examples/01_word_count)
+# # add_subdirectory(examples/02_streaming_recommender)
+# # add_subdirectory(examples/03_pipeline_recommender)
+# # add_subdirectory(examples/04_inverted_recommender)
+# # add_subdirectory(examples/05_complements_recommender)
+# # add_subdirectory(examples/06_substitutes_recommender)
+# # add_subdirectory(examples/07_buddies)
+# # add_subdirectory(examples/08_conditional_branching)
+# # add_subdirectory(examples/09_chaining)
+# 

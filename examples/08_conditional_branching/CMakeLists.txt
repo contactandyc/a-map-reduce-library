@@ -8,6 +8,11 @@ cmake_minimum_required(VERSION 3.20)
 # A dynamically generated examples project.
 project(a_map_reduce_library_08_conditional_branching LANGUAGES C)
 
+if(CMAKE_PREFIX_PATH)
+  include_directories("${CMAKE_PREFIX_PATH}/include")
+  link_directories("${CMAKE_PREFIX_PATH}/lib")
+endif()
+
 find_library(M_LIB m)
 
 find_package(the_io_library CONFIG REQUIRED)
@@ -36,7 +41,7 @@ set_target_properties(conditional_branching PROPERTIES
 if(NOT TARGET a_map_reduce_library::a_map_reduce_library)
   find_package(a_map_reduce_library CONFIG REQUIRED)
 endif()
-target_link_libraries(conditional_branching PRIVATE a_map_reduce_library::a_map_reduce_library)
+# target_link_libraries(conditional_branching PRIVATE a_map_reduce_library::a_map_reduce_library)
 
 target_link_libraries(conditional_branching PRIVATE
   the_io_library::the_io_library
@@ -77,7 +82,7 @@ set_target_properties(conditional_pipeline_branching PROPERTIES
 if(NOT TARGET a_map_reduce_library::a_map_reduce_library)
   find_package(a_map_reduce_library CONFIG REQUIRED)
 endif()
-target_link_libraries(conditional_pipeline_branching PRIVATE a_map_reduce_library::a_map_reduce_library)
+# target_link_libraries(conditional_pipeline_branching PRIVATE a_map_reduce_library::a_map_reduce_library)
 
 target_link_libraries(conditional_pipeline_branching PRIVATE
   the_io_library::the_io_library
