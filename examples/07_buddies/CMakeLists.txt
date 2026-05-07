@@ -8,6 +8,11 @@ cmake_minimum_required(VERSION 3.20)
 # A dynamically generated examples project.
 project(a_map_reduce_library_07_buddies LANGUAGES C)
 
+if(CMAKE_PREFIX_PATH)
+  include_directories("${CMAKE_PREFIX_PATH}/include")
+  link_directories("${CMAKE_PREFIX_PATH}/lib")
+endif()
+
 find_library(M_LIB m)
 
 find_package(the_io_library CONFIG REQUIRED)
@@ -40,7 +45,7 @@ set_target_properties(buddies PROPERTIES
 if(NOT TARGET a_map_reduce_library::a_map_reduce_library)
   find_package(a_map_reduce_library CONFIG REQUIRED)
 endif()
-target_link_libraries(buddies PRIVATE a_map_reduce_library::a_map_reduce_library)
+# target_link_libraries(buddies PRIVATE a_map_reduce_library::a_map_reduce_library)
 
 target_link_libraries(buddies PRIVATE
   the_io_library::the_io_library

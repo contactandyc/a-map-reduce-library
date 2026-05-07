@@ -1,7 +1,7 @@
 # BUILDING
 
 This project: **A Map Reduce Library**
-Version: **0.1.4**
+Version: **0.1.5**
 
 ## Local build
 
